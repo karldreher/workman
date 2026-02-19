@@ -867,11 +867,7 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         .map(|(text, _, style)| ListItem::new(text.as_str()).style(*style))
         .collect();
 
-    let tree_title = match app.get_selected_selection() {
-        Some(Selection::Project(p_idx)) => format!("Projects & Worktrees: {}", app.config.projects[p_idx].name),
-        Some(Selection::Worktree(p_idx, w_idx)) => format!("Projects & Worktrees: {} -> {}", app.config.projects[p_idx].name, app.config.projects[p_idx].worktrees[w_idx].name),
-        None => "Projects & Worktrees".to_string(),
-    };
+    let tree_title = "Repos & Worktrees".to_string();
 
     let tree_block = Block::default()
         .borders(Borders::ALL)
