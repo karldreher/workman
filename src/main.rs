@@ -1,11 +1,11 @@
 use anyhow::Result;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{self, Event, KeyCode}, // Added Event
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
-    backend::{Backend, CrosstermBackend},
+    backend::{Backend, CrosstermBackend}, // Added Backend
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
@@ -34,7 +34,6 @@ enum InputMode {
     Normal,
     AddingProjectPath,
     AddingWorktreeName,
-    AddingWorktreeBranch,
     RunningCommand,
     ViewingDiff, // New input mode
 }
@@ -188,7 +187,6 @@ struct App {
     tree_state: ListState,
     input_mode: InputMode,
     input: String,
-    temp_worktree_name: String,
     error_message: Option<String>,
     full_error_detail: Option<String>,
     command_output: Vec<String>,
@@ -205,7 +203,6 @@ impl App {
             tree_state: ListState::default(),
             input_mode: InputMode::Normal,
             input: String::new(),
-            temp_worktree_name: String::new(),
             error_message: None,
             full_error_detail: None,
             command_output: Vec::new(), // Initialize new field
@@ -639,38 +636,18 @@ fn run_app<B: Backend + io::Write>(terminal: &mut Terminal<B>, mut app: App, run
                     },
                     InputMode::AddingWorktreeName => match key.code {
                         KeyCode::Enter => {
-                            let name = app.input.drain(..).collect::<String>();
-                            app.temp_worktree_name = name.clone();
-                            app.input = name; // Default branch to worktree name
-                            app.input_mode = InputMode::AddingWorktreeBranch;
-                            app.error_message = None;
-                            app.full_error_detail = None;
-                            app.command_output.clear();
-                        }
-                        KeyCode::Char(c) => app.input.push(c),
-                        KeyCode::Backspace => { app.input.pop(); }
-                        KeyCode::Esc => {
-                            app.input_mode = InputMode::Normal;
-                            app.error_message = None;
-                            app.full_error_detail = None;
-                            app.input.clear();
-                            app.command_output.clear();
-                        }
-                        _ => {}
-                    },
-                    InputMode::AddingWorktreeBranch => match key.code {
-                        KeyCode::Enter => {
-                            let branch = app.input.trim().to_string();
-                            if branch.is_empty() {
-                                app.error_message = Some("Branch name cannot be empty".to_string());
-                                app.full_error_detail = Some("Branch name cannot be empty".to_string());
+                            let name = app.input.trim().to_string();
+                            if name.is_empty() {
+                                app.error_message = Some("Worktree name cannot be empty".to_string());
+                                app.full_error_detail = Some("Worktree name cannot be empty".to_string());
                                 app.command_output.clear();
                                 return Ok(());
                             }
                             
                             if let Some(Selection::Project(p_idx)) = app.get_selected_selection() { // Ensure a project is selected
                                 let p_path = app.config.projects[p_idx].path.clone();
-                                let wt_name = app.temp_worktree_name.clone();
+                                let wt_name = name.clone();
+                                let branch = name; // Use worktree name as branch name
                                 
                                 // 0. Handle .workman/ directory and .gitignore
                                 let workman_dir = p_path.join(".workman");
@@ -795,10 +772,7 @@ fn run_app<B: Backend + io::Write>(terminal: &mut Terminal<B>, mut app: App, run
                                 app.command_output.clear();
                             }
                         }
-                        KeyCode::Char(c) => {
-                            app.input.push(c);
-                            app.error_message = None;
-                        }
+                        KeyCode::Char(c) => app.input.push(c),
                         KeyCode::Backspace => { app.input.pop(); }
                         KeyCode::Esc => {
                             app.input_mode = InputMode::Normal;
@@ -809,6 +783,7 @@ fn run_app<B: Backend + io::Write>(terminal: &mut Terminal<B>, mut app: App, run
                         }
                         _ => {}
                     },
+
                     InputMode::RunningCommand => match key.code {
                         KeyCode::Enter => {
                             let cmd = app.input.drain(..).collect::<String>();
@@ -816,7 +791,7 @@ fn run_app<B: Backend + io::Write>(terminal: &mut Terminal<B>, mut app: App, run
                                 let wt_path = app.config.projects[p_idx].worktrees[w_idx].path.clone();
                                 
                                 disable_raw_mode()?;
-                                execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+                                execute!(terminal.backend_mut(), LeaveAlternateScreen)?; // Remove DisableMouseCapture
                                 
                                 let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
                                 let output = std::process::Command::new(shell)
@@ -825,7 +800,7 @@ fn run_app<B: Backend + io::Write>(terminal: &mut Terminal<B>, mut app: App, run
                                     .current_dir(wt_path)
                                     .output();
                                 
-                                execute!(terminal.backend_mut(), EnterAlternateScreen, EnableMouseCapture)?;
+                                execute!(terminal.backend_mut(), EnterAlternateScreen)?; // Remove EnableMouseCapture
                                 enable_raw_mode()?;
                                 terminal.clear().map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
@@ -946,9 +921,6 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         InputMode::AddingWorktreeName => {
             help_text_lines.push(" Enter Worktree Name (Esc: cancel)".to_string());
         },
-        InputMode::AddingWorktreeBranch => {
-            help_text_lines.push(" Enter Branch Name (Esc: cancel)".to_string());
-        },
         InputMode::RunningCommand => {
             help_text_lines.push(" Enter Command (Esc: cancel)".to_string());
         },
@@ -999,7 +971,6 @@ fn ui(f: &mut ratatui::Frame, app: &mut App) {
         let prompt = match app.input_mode {
             InputMode::AddingProjectPath => "Path> ".to_string(),
             InputMode::AddingWorktreeName => "Name> ".to_string(),
-            InputMode::AddingWorktreeBranch => "Branch> ".to_string(),
             InputMode::RunningCommand => "Cmd> ".to_string(),
             _ => "> ".to_string(), // Should not happen for these modes
         };
