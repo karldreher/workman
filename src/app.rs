@@ -160,3 +160,126 @@ impl App {
         self.tree_state.select(Some(i));
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{Project, Worktree};
+
+    #[test]
+    fn test_app_navigation() {
+        let mut app = App {
+            config: Config::default(),
+            tree_state: ListState::default(),
+            input_mode: InputMode::Normal,
+            input: String::new(),
+            error_message: None,
+            full_error_detail: None,
+            command_output: Vec::new(),
+            diff_scroll_offset: 0,
+            path_completions: Vec::new(),
+            completion_idx: None,
+        };
+
+        app.config.projects.push(Project {
+            name: "p1".to_string(),
+            path: PathBuf::from("/p1"),
+            worktrees: vec![
+                Worktree { name: "w1".to_string(), path: PathBuf::from("/p1/w1") },
+            ],
+        });
+        app.config.projects.push(Project {
+            name: "p2".to_string(),
+            path: PathBuf::from("/p2"),
+            worktrees: vec![],
+        });
+
+        // Initial state
+        app.tree_state.select(Some(0));
+        let items = app.get_tree_items();
+        assert_eq!(items.len(), 3); // p1, w1, p2
+        assert_eq!(app.get_selected_selection(), Some(Selection::Project(0)));
+
+        // Next
+        app.next();
+        assert_eq!(app.get_selected_selection(), Some(Selection::Worktree(0, 0)));
+
+        // Next
+        app.next();
+        assert_eq!(app.get_selected_selection(), Some(Selection::Project(1)));
+
+        // Next (wrap)
+        app.next();
+        assert_eq!(app.get_selected_selection(), Some(Selection::Project(0)));
+
+        // Previous (wrap)
+        app.previous();
+        assert_eq!(app.get_selected_selection(), Some(Selection::Project(1)));
+    }
+
+    #[test]
+    fn test_get_tree_items() {
+        let mut config = Config::default();
+        config.projects.push(Project {
+            name: "p1".to_string(),
+            path: PathBuf::from("/p1"),
+            worktrees: vec![
+                Worktree { name: "w1".to_string(), path: PathBuf::from("/p1/w1") },
+            ],
+        });
+
+        let app = App {
+            config,
+            tree_state: ListState::default(),
+            input_mode: InputMode::Normal,
+            input: String::new(),
+            error_message: None,
+            full_error_detail: None,
+            command_output: Vec::new(),
+            diff_scroll_offset: 0,
+            path_completions: Vec::new(),
+            completion_idx: None,
+        };
+
+        let items = app.get_tree_items();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].0, "p1");
+        assert_eq!(items[0].1, Selection::Project(0));
+        assert!(items[1].0.contains("w1"));
+        assert_eq!(items[1].1, Selection::Worktree(0, 0));
+    }
+
+    #[test]
+    fn test_update_completions() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path();
+        
+        fs::create_dir(path.join("dir1")).unwrap();
+        fs::File::create(path.join("file1.txt")).unwrap();
+        fs::File::create(path.join("file2.txt")).unwrap();
+
+        let mut app = App {
+            config: Config::default(),
+            tree_state: ListState::default(),
+            input_mode: InputMode::Normal,
+            input: path.to_str().unwrap().to_string() + "/",
+            error_message: None,
+            full_error_detail: None,
+            command_output: Vec::new(),
+            diff_scroll_offset: 0,
+            path_completions: Vec::new(),
+            completion_idx: None,
+        };
+
+        app.update_completions();
+        // It might find other things if path is /tmp and other things are there, 
+        // but since we created a fresh tempdir, it should only have our files.
+        assert!(app.path_completions.len() >= 3);
+        
+        // Use ends_with or contains to be robust against full paths
+        let completions = app.path_completions.clone();
+        assert!(completions.iter().any(|c| c.contains("dir1/")));
+        assert!(completions.iter().any(|c| c.contains("file1.txt")));
+        assert!(completions.iter().any(|c| c.contains("file2.txt")));
+    }
+}

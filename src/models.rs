@@ -228,3 +228,61 @@ impl Config {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_serialization() {
+        let mut config = Config::default();
+        config.projects.push(Project {
+            name: "test".to_string(),
+            path: PathBuf::from("/tmp/test"),
+            worktrees: vec![Worktree {
+                name: "wt1".to_string(),
+                path: PathBuf::from("/tmp/test/wt1"),
+            }],
+        });
+
+        let json = serde_json::to_string(&config).unwrap();
+        let decoded: Config = serde_json::from_str(&json).unwrap();
+        assert_eq!(decoded.projects.len(), 1);
+        assert_eq!(decoded.projects[0].name, "test");
+        assert_eq!(decoded.projects[0].worktrees.len(), 1);
+        assert_eq!(decoded.projects[0].worktrees[0].name, "wt1");
+    }
+
+    #[test]
+    fn test_project_worktree_structs() {
+        let wt = Worktree {
+            name: "wt".to_string(),
+            path: PathBuf::from("/path/to/wt"),
+        };
+        let project = Project {
+            name: "proj".to_string(),
+            path: PathBuf::from("/path/to/proj"),
+            worktrees: vec![wt.clone()],
+        };
+
+        assert_eq!(project.worktrees[0].name, wt.name);
+        assert_eq!(project.worktrees[0].path, wt.path);
+    }
+
+    #[test]
+    fn test_validate_project_path() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path().to_path_buf();
+        
+        // Should fail if no .git
+        assert!(Config::validate_project_path(&path).is_err());
+
+        // Should pass if .git exists
+        fs::create_dir(path.join(".git")).unwrap();
+        assert!(Config::validate_project_path(&path).is_ok());
+
+        // Should fail if path does not exist
+        let non_existent = PathBuf::from("/nonexistent/path/for/workman/test");
+        assert!(Config::validate_project_path(&non_existent).is_err());
+    }
+}
