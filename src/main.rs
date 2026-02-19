@@ -226,6 +226,11 @@ fn run_app<B: Backend + io::Write>(terminal: &mut Terminal<B>, mut app: App, run
                         }
                         KeyCode::Down => app.next(),
                         KeyCode::Up => app.previous(),
+                        KeyCode::Esc => {
+                            app.command_output.clear();
+                            app.error_message = None;
+                            app.full_error_detail = None;
+                        }
                         _ => {}
                     },
                     InputMode::ViewingDiff => match key.code {
