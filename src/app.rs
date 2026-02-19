@@ -142,6 +142,9 @@ impl App {
             None => 0,
         };
         self.tree_state.select(Some(i));
+        self.command_output.clear();
+        self.error_message = None;
+        self.full_error_detail = None;
     }
 
     pub fn previous(&mut self) {
@@ -158,6 +161,9 @@ impl App {
             None => 0,
         };
         self.tree_state.select(Some(i));
+        self.command_output.clear();
+        self.error_message = None;
+        self.full_error_detail = None;
     }
 }
 
@@ -215,6 +221,44 @@ mod tests {
         // Previous (wrap)
         app.previous();
         assert_eq!(app.get_selected_selection(), Some(Selection::Project(1)));
+    }
+
+    #[test]
+    fn test_navigation_clears_output() {
+        let mut app = App {
+            config: Config::default(),
+            tree_state: ListState::default(),
+            input_mode: InputMode::Normal,
+            input: String::new(),
+            error_message: Some("error".to_string()),
+            full_error_detail: Some("detail".to_string()),
+            command_output: vec!["output".to_string()],
+            diff_scroll_offset: 0,
+            path_completions: Vec::new(),
+            completion_idx: None,
+        };
+
+        app.config.projects.push(Project {
+            name: "p1".to_string(),
+            path: PathBuf::from("/p1"),
+            worktrees: vec![],
+        });
+        app.config.projects.push(Project {
+            name: "p2".to_string(),
+            path: PathBuf::from("/p2"),
+            worktrees: vec![],
+        });
+
+        app.tree_state.select(Some(0));
+        
+        app.next();
+        assert!(app.command_output.is_empty());
+        assert!(app.error_message.is_none());
+        assert!(app.full_error_detail.is_none());
+
+        app.command_output = vec!["new output".to_string()];
+        app.previous();
+        assert!(app.command_output.is_empty());
     }
 
     #[test]
