@@ -12,8 +12,8 @@ A minimalist Git worktree manager for staying focused in large repositories.
 
 *   **Isolated Worktrees**: All worktrees are created under `.workman/` and automatically added to `.gitignore`.
 *   **Automatic Branching**: Automatically detects if a branch exists or creates a new one with `-b`.
-*   **TUI Navigation**: Fast, keyboard-driven interface with tabbed panel navigation.
-*   **Git Status at a Glance**: Color-coded worktrees (Green for clean/pushed, Red for dirty/unpushed).
+*   **TUI Navigation**: Fast, keyboard-driven interface with a single tree-like view for projects and worktrees.
+*   **Git Status at a Glance**: Detailed status including diff stats (e.g., `0/0`, `10/-12`), untracked files (`U:1`), and unpushed commits (`↑3`). Color-coded (Green for clean, Red for dirty).
 *   **Persistent Config**: Remembers your projects and worktrees across sessions (`~/.workman.config`).
 *   **Quick Commands**: Run one-off shell commands directly from the TUI.
 
@@ -38,14 +38,15 @@ Run `workman` from any terminal.
 | Key | Action |
 | :--- | :--- |
 | `q` | Quit |
-| `Tab` / `Shift+Tab` | Cycle panel focus (Projects, Worktrees, Actions) |
-| `Arrows` | Navigate lists |
+
+| `Arrows` | Navigate the combined projects/worktrees list |
 | `a` | Add a new project (supports path autocomplete with Tab) |
-| `d` | Delete project from workman |
+| `x` | Delete project from workman |
 | `w` | Add new worktree (automatically derives branch name) |
-| `r` | Remove worktree |
-| `c` | Run a single command in the selected worktree |
-| `p` | Push the current branch of the selected worktree |
+| `r` | Remove worktree (output in right panel) |
+| `c` | Run a single command in the selected worktree (output in right panel) |
+| `p` | Push the current branch of the selected worktree (output in right panel) |
+| `d` | Show diff for selected worktree (Space to scroll, Esc to exit) |
 | `Ctrl+C` | Global quit |
 | `Ctrl+L` | Export error logs to `/tmp/workman.log` |
 
