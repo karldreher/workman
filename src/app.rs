@@ -17,6 +17,7 @@ pub enum InputMode {
     AddingWorktreeName,
     RunningCommand,
     ViewingDiff,
+    EditingCommitMessage,
 }
 
 pub struct App {

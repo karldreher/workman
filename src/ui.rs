@@ -10,8 +10,8 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
         .direction(Direction::Horizontal)
         .constraints(
             [
-                Constraint::Percentage(25), // Thinner column for the tree view
-                Constraint::Percentage(75), // Wider column for actions and help
+                Constraint::Percentage(33), // Thinner column for the tree view
+                Constraint::Percentage(66), // Wider column for actions and help
             ]
             .as_ref(),
         )
@@ -80,6 +80,9 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
         InputMode::ViewingDiff => {
             help_text_lines.push(" Viewing Diff (Space: scroll, Esc: exit)".to_string());
         },
+        InputMode::EditingCommitMessage => {
+            help_text_lines.push(" Enter Commit Message (Enter for auto, Esc: cancel)".to_string());
+        },
     }
 
     let help_paragraph = Paragraph::new(help_text_lines.join("
@@ -125,6 +128,7 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
         let prompt = match app.input_mode {
             InputMode::AddingProjectPath => "Path> ".to_string(),
             InputMode::AddingWorktreeName => "Name> ".to_string(),
+            InputMode::EditingCommitMessage => "Msg> ".to_string(),
             InputMode::RunningCommand => "> ".to_string(),
             _ => "> ".to_string(), // Should not happen for these modes
         };

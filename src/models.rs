@@ -89,7 +89,7 @@ impl Project {
 }
 
 impl Worktree {
-    pub fn push(&self) -> Result<(std::process::Output, std::process::Output, std::process::Output)> {
+    pub fn push(&self, commit_message: Option<String>) -> Result<(std::process::Output, std::process::Output, std::process::Output)> {
         // First, add all changes
         let add_output = std::process::Command::new("git")
             .arg("-C")
@@ -100,12 +100,13 @@ impl Worktree {
             .map_err(|e| anyhow::anyhow!(e))?;
 
         // Then, commit with a default message (only if there are staged changes)
+        let message = commit_message.unwrap_or_else(|| "workman: auto-commit".to_string());
         let commit_output = std::process::Command::new("git")
             .arg("-C")
             .arg(&self.path)
             .arg("commit")
             .arg("-m")
-            .arg("workman: auto-commit")
+            .arg(message)
             .output()
             .map_err(|e| anyhow::anyhow!(e))?;
 

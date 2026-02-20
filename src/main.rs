@@ -163,54 +163,12 @@ fn run_app<B: Backend + io::Write>(terminal: &mut Terminal<B>, mut app: App, run
                             }
                         }
                         KeyCode::Char('p') => {
-                            if let Some(Selection::Worktree(p_idx, w_idx)) = app.get_selected_selection() {
-                                match app.config.projects[p_idx].worktrees[w_idx].push() {
-                                    Ok((add_out, commit_out, push_out)) => {
-                                        let mut output = Vec::new();
-                                        
-                                        // Collect all outputs
-                                        if !add_out.stdout.is_empty() {
-                                            output.extend(String::from_utf8_lossy(&add_out.stdout).lines().map(String::from));
-                                        }
-                                        if !commit_out.stdout.is_empty() {
-                                            output.extend(String::from_utf8_lossy(&commit_out.stdout).lines().map(String::from));
-                                        }
-                                        if !push_out.stdout.is_empty() {
-                                            output.extend(String::from_utf8_lossy(&push_out.stdout).lines().map(String::from));
-                                        }
-                                        
-                                        // Collect all errors
-                                        if !add_out.stderr.is_empty() {
-                                            output.extend(String::from_utf8_lossy(&add_out.stderr).lines().map(String::from));
-                                        }
-                                        if !commit_out.stderr.is_empty() {
-                                            output.extend(String::from_utf8_lossy(&commit_out.stderr).lines().map(String::from));
-                                        }
-                                        if !push_out.stderr.is_empty() {
-                                            output.extend(String::from_utf8_lossy(&push_out.stderr).lines().map(String::from));
-                                        }
-                                        
-                                        app.command_output = output;
-                                        
-                                        // Check if push succeeded
-                                        if !push_out.status.success() {
-                                            app.error_message = Some("Push failed".to_string());
-                                            app.full_error_detail = Some(app.command_output.join("\n"));
-                                        } else {
-                                            // Success: prepend success message to output
-                                            let mut success_output = vec!["Push successful!".to_string()];
-                                            success_output.extend(app.command_output.clone());
-                                            app.command_output = success_output;
-                                            app.error_message = None;
-                                            app.full_error_detail = None;
-                                        }
-                                    },
-                                    Err(e) => {
-                                        app.error_message = Some("System error occurred during push".to_string());
-                                        app.full_error_detail = Some(e.to_string());
-                                        app.command_output.clear();
-                                    }
-                                }
+                            if let Some(Selection::Worktree(_p_idx, _w_idx)) = app.get_selected_selection() {
+                                app.input_mode = InputMode::EditingCommitMessage;
+                                app.input.clear();
+                                app.error_message = None;
+                                app.full_error_detail = None;
+                                app.command_output.clear();
                             }
                         }
                         KeyCode::Char('d') => {
@@ -460,6 +418,78 @@ fn run_app<B: Backend + io::Write>(terminal: &mut Terminal<B>, mut app: App, run
                             } else {
                                 app.error_message = Some("No worktree selected to run command in.".to_string());
                                 app.full_error_detail = Some("No worktree selected to run command in.".to_string());
+                            }
+                            app.input_mode = InputMode::Normal;
+                            app.input.clear();
+                        }
+                        KeyCode::Char(c) => app.input.push(c),
+                        KeyCode::Backspace => { app.input.pop(); }
+                        KeyCode::Esc => {
+                            app.input_mode = InputMode::Normal;
+                            app.error_message = None;
+                            app.full_error_detail = None;
+                            app.input.clear();
+                            app.command_output.clear();
+                        }
+                        _ => {}
+                    },
+
+                    InputMode::EditingCommitMessage => match key.code {
+                        KeyCode::Enter => {
+                            let commit_msg = if app.input.trim().is_empty() {
+                                None
+                            } else {
+                                Some(app.input.trim().to_string())
+                            };
+                            
+                            if let Some(Selection::Worktree(p_idx, w_idx)) = app.get_selected_selection() {
+                                match app.config.projects[p_idx].worktrees[w_idx].push(commit_msg) {
+                                    Ok((add_out, commit_out, push_out)) => {
+                                        let mut output = Vec::new();
+                                        
+                                        // Collect all outputs
+                                        if !add_out.stdout.is_empty() {
+                                            output.extend(String::from_utf8_lossy(&add_out.stdout).lines().map(String::from));
+                                        }
+                                        if !commit_out.stdout.is_empty() {
+                                            output.extend(String::from_utf8_lossy(&commit_out.stdout).lines().map(String::from));
+                                        }
+                                        if !push_out.stdout.is_empty() {
+                                            output.extend(String::from_utf8_lossy(&push_out.stdout).lines().map(String::from));
+                                        }
+                                        
+                                        // Collect all errors
+                                        if !add_out.stderr.is_empty() {
+                                            output.extend(String::from_utf8_lossy(&add_out.stderr).lines().map(String::from));
+                                        }
+                                        if !commit_out.stderr.is_empty() {
+                                            output.extend(String::from_utf8_lossy(&commit_out.stderr).lines().map(String::from));
+                                        }
+                                        if !push_out.stderr.is_empty() {
+                                            output.extend(String::from_utf8_lossy(&push_out.stderr).lines().map(String::from));
+                                        }
+                                        
+                                        app.command_output = output;
+                                        
+                                        // Check if push succeeded
+                                        if !push_out.status.success() {
+                                            app.error_message = Some("Push failed".to_string());
+                                            app.full_error_detail = Some(app.command_output.join("\n"));
+                                        } else {
+                                            // Success: prepend success message to output
+                                            let mut success_output = vec!["Push successful!".to_string()];
+                                            success_output.extend(app.command_output.clone());
+                                            app.command_output = success_output;
+                                            app.error_message = None;
+                                            app.full_error_detail = None;
+                                        }
+                                    },
+                                    Err(e) => {
+                                        app.error_message = Some("System error occurred during push".to_string());
+                                        app.full_error_detail = Some(e.to_string());
+                                        app.command_output.clear();
+                                    }
+                                }
                             }
                             app.input_mode = InputMode::Normal;
                             app.input.clear();
