@@ -80,6 +80,9 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
         InputMode::ViewingDiff => {
             help_text_lines.push(" Viewing Diff (Space: scroll, Esc: exit)".to_string());
         },
+        InputMode::EditingCommitMessage => {
+            help_text_lines.push(" Enter Commit Message (Enter for auto, Esc: cancel)".to_string());
+        },
     }
 
     let help_paragraph = Paragraph::new(help_text_lines.join("
@@ -126,6 +129,7 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
             InputMode::AddingProjectPath => "Path> ".to_string(),
             InputMode::AddingWorktreeName => "Name> ".to_string(),
             InputMode::RunningCommand => "Cmd> ".to_string(),
+            InputMode::EditingCommitMessage => "Msg> ".to_string(),
             _ => "> ".to_string(), // Should not happen for these modes
         };
         output_content_lines.push(format!("{}{}", prompt, app.input));
