@@ -197,7 +197,11 @@ fn run_app<B: Backend + io::Write>(terminal: &mut Terminal<B>, mut app: App, run
                                             app.error_message = Some("Push failed".to_string());
                                             app.full_error_detail = Some(app.command_output.join("\n"));
                                         } else {
-                                            app.error_message = Some("Push successful!".to_string());
+                                            // Success: prepend success message to output
+                                            let mut success_output = vec!["Push successful!".to_string()];
+                                            success_output.extend(app.command_output.clone());
+                                            app.command_output = success_output;
+                                            app.error_message = None;
                                             app.full_error_detail = None;
                                         }
                                     },
