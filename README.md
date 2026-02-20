@@ -38,7 +38,6 @@ Run `workman` from any terminal.
 | Key | Action |
 | :--- | :--- |
 | `q` | Quit |
-
 | `Arrows` | Navigate the combined projects/worktrees list |
 | `a` | Add a new project (supports path autocomplete with Tab) |
 | `x` | Delete project from workman |
