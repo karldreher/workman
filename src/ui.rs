@@ -10,8 +10,8 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
         .direction(Direction::Horizontal)
         .constraints(
             [
-                Constraint::Percentage(25), // Thinner column for the tree view
-                Constraint::Percentage(75), // Wider column for actions and help
+                Constraint::Percentage(33), // Thinner column for the tree view
+                Constraint::Percentage(66), // Wider column for actions and help
             ]
             .as_ref(),
         )
