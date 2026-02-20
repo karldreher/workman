@@ -89,13 +89,35 @@ impl Project {
 }
 
 impl Worktree {
-    pub fn push(&self) -> Result<std::process::Output> {
-        std::process::Command::new("git")
+    pub fn push(&self) -> Result<(std::process::Output, std::process::Output, std::process::Output)> {
+        // First, add all changes
+        let add_output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.path)
+            .arg("add")
+            .arg("-A")
+            .output()
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        // Then, commit with a default message (only if there are staged changes)
+        let commit_output = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&self.path)
+            .arg("commit")
+            .arg("-m")
+            .arg("workman: auto-commit")
+            .output()
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        // Finally, push
+        let push_output = std::process::Command::new("git")
             .arg("-C")
             .arg(&self.path)
             .arg("push")
             .output()
-            .map_err(|e| anyhow::anyhow!(e))
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        Ok((add_output, commit_output, push_output))
     }
 
     pub fn get_diff(&self) -> Result<std::process::Output> {

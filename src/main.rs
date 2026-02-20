@@ -165,18 +165,40 @@ fn run_app<B: Backend + io::Write>(terminal: &mut Terminal<B>, mut app: App, run
                         KeyCode::Char('p') => {
                             if let Some(Selection::Worktree(p_idx, w_idx)) = app.get_selected_selection() {
                                 match app.config.projects[p_idx].worktrees[w_idx].push() {
-                                    Ok(out) => {
-                                        app.command_output = String::from_utf8_lossy(&out.stdout).lines().map(String::from).collect();
-                                        if !out.stderr.is_empty() {
-                                            app.command_output.extend(String::from_utf8_lossy(&out.stderr).lines().map(String::from));
+                                    Ok((add_out, commit_out, push_out)) => {
+                                        let mut output = Vec::new();
+                                        
+                                        // Collect all outputs
+                                        if !add_out.stdout.is_empty() {
+                                            output.extend(String::from_utf8_lossy(&add_out.stdout).lines().map(String::from));
                                         }
-                                        if !out.status.success() {
+                                        if !commit_out.stdout.is_empty() {
+                                            output.extend(String::from_utf8_lossy(&commit_out.stdout).lines().map(String::from));
+                                        }
+                                        if !push_out.stdout.is_empty() {
+                                            output.extend(String::from_utf8_lossy(&push_out.stdout).lines().map(String::from));
+                                        }
+                                        
+                                        // Collect all errors
+                                        if !add_out.stderr.is_empty() {
+                                            output.extend(String::from_utf8_lossy(&add_out.stderr).lines().map(String::from));
+                                        }
+                                        if !commit_out.stderr.is_empty() {
+                                            output.extend(String::from_utf8_lossy(&commit_out.stderr).lines().map(String::from));
+                                        }
+                                        if !push_out.stderr.is_empty() {
+                                            output.extend(String::from_utf8_lossy(&push_out.stderr).lines().map(String::from));
+                                        }
+                                        
+                                        app.command_output = output;
+                                        
+                                        // Check if push succeeded
+                                        if !push_out.status.success() {
                                             app.error_message = Some("Push failed".to_string());
                                             app.full_error_detail = Some(app.command_output.join("\n"));
                                         } else {
-                                            app.error_message = None;
+                                            app.error_message = Some("Push successful!".to_string());
                                             app.full_error_detail = None;
-                                            app.command_output.clear();
                                         }
                                     },
                                     Err(e) => {
