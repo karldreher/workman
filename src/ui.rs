@@ -95,7 +95,7 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
     // BOTTOM-RIGHT: Output / Command Pane
     let output_pane_block = Block::default()
         .borders(Borders::ALL)
-        .title("Output / Command")
+        .title(if app.input_mode == InputMode::RunningCommand { "Command / Output" } else { "Output" })
         .border_style(if app.input_mode != InputMode::Normal { Style::default().fg(Color::Yellow) } else { Style::default() }); // Highlight if active input mode
 
     let mut output_content_lines = Vec::new();
@@ -128,8 +128,8 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
         let prompt = match app.input_mode {
             InputMode::AddingProjectPath => "Path> ".to_string(),
             InputMode::AddingWorktreeName => "Name> ".to_string(),
-            InputMode::RunningCommand => "Cmd> ".to_string(),
             InputMode::EditingCommitMessage => "Msg> ".to_string(),
+            InputMode::RunningCommand => "> ".to_string(),
             _ => "> ".to_string(), // Should not happen for these modes
         };
         output_content_lines.push(format!("{}{}", prompt, app.input));

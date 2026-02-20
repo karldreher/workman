@@ -23,9 +23,12 @@ jobs:
             os: macos-latest
             target: x86_64-apple-darwin
 
-          - build: windows
-            os: windows-latest
-            target: x86_64-pc-windows-msvc
+          # Windows support is not a priority.  
+          ## The build does not work and would need 
+          ## contributorship or interest from Windows users.
+          # - build: windows
+          #   os: windows-latest
+          #   target: x86_64-pc-windows-msvc
 
     steps:
       - name: Checkout
