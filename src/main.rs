@@ -266,13 +266,36 @@ async fn run_app<B: Backend + io::Write>(terminal: &mut Terminal<B>, mut app: Ap
                             }
                             _ => {}
                         },
-                        InputMode::Terminal => match key.code {
-                            KeyCode::Esc => {
+                        InputMode::Terminal => match key {
+                            event::KeyEvent {
+                                code: KeyCode::Char('c'),
+                                modifiers: event::KeyModifiers::CONTROL,
+                                ..
+                            } => {
+                                if let Some(sel) = app.get_selected_selection() {
+                                    if let Some(session) = app.sessions.get_mut(&sel) {
+                                        let _ = session.write(&[3]); // Send ETX (Ctrl-C)
+                                        app.terminal_warning = Some(
+                                            "Ctrl-C sent. Use 'exit' or Ctrl-D to close the shell. Press Esc to detach."
+                                                .to_string(),
+                                        );
+                                    }
+                                }
+                            }
+                            event::KeyEvent {
+                                code: KeyCode::Esc, ..
+                            } => {
                                 app.input_mode = InputMode::Normal;
+                                app.terminal_warning = None; // Clear warning on detach
                             }
                             _ => {
                                 if let Some(sel) = app.get_selected_selection() {
                                     if let Some(session) = app.sessions.get_mut(&sel) {
+                                        // Clear warning on any other keypress
+                                        if app.terminal_warning.is_some() {
+                                            app.terminal_warning = None;
+                                        }
+
                                         // Send key to PTY
                                         let data = match key.code {
                                             KeyCode::Char(c) => {
