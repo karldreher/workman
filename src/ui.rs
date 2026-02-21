@@ -3,7 +3,9 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, List, ListItem, Paragraph},
+    text::{Line, Span},
 };
+use vt100::Color as Vt100Color; // Use Vt100Color directly
 
 pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
     let main_layout = Layout::default()
@@ -52,41 +54,48 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
         .title("Help")
         .border_style(Style::default().fg(Color::LightBlue)); // Always active and visible
 
-    let mut help_text_lines = Vec::new();
+    let mut help_text_lines: Vec<Line> = Vec::new();
     match app.input_mode {
         InputMode::Normal => {
             match app.get_selected_selection() {
                 Some(Selection::Project(_)) => {
-                    help_text_lines.push(" 'a': Add Project, 'x': Del Project, 'w': Add Worktree".to_string());
+                    help_text_lines.push(Line::from(" 'a': Add Project, 'x': Del Project, 'w': Add Worktree"));
                 },
                 Some(Selection::Worktree(_, _)) => {
-                    help_text_lines.push(" 'c': Run Cmd, 'p': Push, 'r': Rm Worktree, 'd': Show Diff".to_string());
+                    help_text_lines.push(Line::from(" 'c': Attach/Terminal, 'p': Push, 'r': Rm Worktree, 'd': Show Diff"));
                 },
                 None => {
-                    help_text_lines.push(" 'a': Add Project".to_string());
+                    help_text_lines.push(Line::from(" 'a': Add Project"));
                 }
             }
-            help_text_lines.push(" Arrows: Navigate, 'q': Quit, Ctrl+L: Export log".to_string());
+            help_text_lines.push(Line::from(" Arrows: Navigate, 'q': Quit, Ctrl+L: Export log"));
         },
         InputMode::AddingProjectPath => {
-            help_text_lines.push(" Enter Project Path (Tab: autocomplete, Esc: cancel)".to_string());
+            help_text_lines.push(Line::from(" Enter Project Path (Tab: autocomplete, Esc: cancel)"));
         },
         InputMode::AddingWorktreeName => {
-            help_text_lines.push(" Enter Worktree Name (Esc: cancel)".to_string());
-        },
-        InputMode::RunningCommand => {
-            help_text_lines.push(" Enter Command (Esc: cancel)".to_string());
+            help_text_lines.push(Line::from(" Enter Worktree Name (Esc: cancel)"));
         },
         InputMode::ViewingDiff => {
-            help_text_lines.push(" Viewing Diff (Space: scroll, Esc: exit)".to_string());
+            help_text_lines.push(Line::from(" Viewing Diff (Space: scroll, Esc: exit)"));
         },
         InputMode::EditingCommitMessage => {
-            help_text_lines.push(" Enter Commit Message (Enter for auto, Esc: cancel)".to_string());
+            help_text_lines.push(Line::from(" Enter Commit Message (Enter for auto, Esc: cancel)"));
         },
+        InputMode::Terminal => {
+            if let Some(warning) = &app.terminal_warning {
+                let warning_span = Span::styled(
+                    format!(" {}", warning),
+                    Style::default().fg(Color::Yellow),
+                );
+                help_text_lines.push(Line::from(vec![warning_span]));
+            } else {
+                help_text_lines.push(Line::from(" Terminal Mode (Esc: detach)"));
+            }
+        }
     }
 
-    let help_paragraph = Paragraph::new(help_text_lines.join("
-"))
+    let help_paragraph = Paragraph::new(help_text_lines)
         .block(help_block)
         .wrap(ratatui::widgets::Wrap { trim: true });
     f.render_widget(help_paragraph, right_panel_chunks[0]);
@@ -95,8 +104,56 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
     // BOTTOM-RIGHT: Output / Command Pane
     let output_pane_block = Block::default()
         .borders(Borders::ALL)
-        .title(if app.input_mode == InputMode::RunningCommand { "Command / Output" } else { "Output" })
+        .title(if app.input_mode == InputMode::Terminal { "Terminal (Attached)" } else { "Output / Terminal" })
         .border_style(if app.input_mode != InputMode::Normal { Style::default().fg(Color::Yellow) } else { Style::default() }); // Highlight if active input mode
+
+    let selected = app.get_selected_selection();
+    if let Some(sel) = selected {
+        if let Some(session) = app.sessions.get(&sel) {
+            let parser = session.parser.lock().unwrap();
+            let screen = parser.screen();
+            let (rows, cols) = screen.size();
+            
+            let mut lines = Vec::new();
+            for row_idx in 0..rows {
+                let mut spans = Vec::new();
+                for col_idx in 0..cols {
+                    if let Some(cell) = screen.cell(row_idx, col_idx) {
+                        let mut style = Style::default();
+                        
+                        style = style.fg(map_vt100_color(cell.fgcolor()));
+                        style = style.bg(map_vt100_color(cell.bgcolor()));
+
+                        if cell.bold() {
+                            style = style.add_modifier(Modifier::BOLD);
+                        }
+                        if cell.italic() {
+                            style = style.add_modifier(Modifier::ITALIC);
+                        }
+                        if cell.underline() {
+                            style = style.add_modifier(Modifier::UNDERLINED);
+                        }
+                        
+                        spans.push(Span::styled(cell.contents(), style));
+                    } else {
+                        spans.push(Span::raw(" ")); // If cell is None, print a space
+                    }
+                }
+                lines.push(Line::from(spans));
+            }
+            
+            let terminal_paragraph = Paragraph::new(lines)
+                .block(output_pane_block);
+            f.render_widget(terminal_paragraph, right_panel_chunks[1]);
+
+            // Set cursor position based on PTY's screen cursor
+            let (cursor_row, cursor_col) = screen.cursor_position();
+            let cursor_x = right_panel_chunks[1].x + 1 + cursor_col; // +1 for left border
+            let cursor_y = right_panel_chunks[1].y + 1 + cursor_row; // +1 for top border
+            f.set_cursor_position((cursor_x, cursor_y));
+            return;
+        }
+    }
 
     let mut output_content_lines = Vec::new();
 
@@ -124,13 +181,12 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
     }
 
     // Input prompt and current input if active
-    if app.input_mode != InputMode::Normal && app.input_mode != InputMode::ViewingDiff {
+    if app.input_mode == InputMode::AddingProjectPath || app.input_mode == InputMode::AddingWorktreeName || app.input_mode == InputMode::EditingCommitMessage {
         let prompt = match app.input_mode {
             InputMode::AddingProjectPath => "Path> ".to_string(),
             InputMode::AddingWorktreeName => "Name> ".to_string(),
             InputMode::EditingCommitMessage => "Msg> ".to_string(),
-            InputMode::RunningCommand => "> ".to_string(),
-            _ => "> ".to_string(), // Should not happen for these modes
+            _ => "> ".to_string(), // Fallback for other potential input modes
         };
         output_content_lines.push(format!("{}{}", prompt, app.input));
     } else if app.input_mode == InputMode::Normal && app.input.len() > 0 {
@@ -143,4 +199,12 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
         .block(output_pane_block)
         .wrap(ratatui::widgets::Wrap { trim: false }); // Do not trim for diff/command output
     f.render_widget(output_paragraph, right_panel_chunks[1]);
+}
+
+fn map_vt100_color(color: Vt100Color) -> Color {
+    match color {
+        Vt100Color::Default => Color::Reset,
+        Vt100Color::Idx(i) => Color::Indexed(i),
+        Vt100Color::Rgb(r, g, b) => Color::Rgb(r, g, b),
+    }
 }
