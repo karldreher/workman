@@ -181,7 +181,7 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
     }
 
     // Input prompt and current input if active
-    if app.input_mode != InputMode::Normal && app.input_mode != InputMode::ViewingDiff && app.input_mode != InputMode::Terminal && app.input_mode != InputMode::EditingCommitMessage { // Exclude terminal input mode, viewing diff, and normal from showing prompt
+    if app.input_mode == InputMode::AddingProjectPath || app.input_mode == InputMode::AddingWorktreeName || app.input_mode == InputMode::EditingCommitMessage {
         let prompt = match app.input_mode {
             InputMode::AddingProjectPath => "Path> ".to_string(),
             InputMode::AddingWorktreeName => "Name> ".to_string(),
