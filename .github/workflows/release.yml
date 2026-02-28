@@ -57,6 +57,13 @@ jobs:
         shell: bash
         run: cargo build --verbose --release --target ${{ matrix.target }}
 
+      - name: Ad-hoc Sign (macOS)
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          binary_path="target/${{ matrix.target }}/release/workman"
+          codesign --force --sign - "$binary_path"
+
       - name: Build archive
         shell: bash
         run: |
