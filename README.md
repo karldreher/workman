@@ -19,6 +19,8 @@ A minimalist Git worktree manager for staying focused in large repositories.
 
 ## Installation
 
+### Manual
+
 ```bash
 # Clone the repository
 git clone https://github.com/your-username/workman
@@ -28,6 +30,16 @@ cd workman
 cargo build --release
 cp target/release/workman /usr/local/bin/
 ```
+
+### macOS (GitHub Releases)
+
+If you download the binary directly from GitHub, macOS will block it with a "Developer cannot be verified" message. To fix this, run the following command to remove the "quarantine" flag after extracting:
+
+```bash
+xattr -d com.apple.quarantine workman
+```
+
+Alternatively, you can right-click the binary in Finder, select **Open**, and then click **Open Anyway** in the dialog box.
 
 ## Usage
 
