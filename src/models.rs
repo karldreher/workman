@@ -135,12 +135,9 @@ impl Worktree {
             return "N/A".to_string();
         }
 
-        let git_dir_arg = format!("--git-dir={}/.git", self.path.display());
-        let work_tree_arg = format!("--work-tree={}", self.path.display());
-
         let diff_numstat_output = std::process::Command::new("git")
-            .arg(&git_dir_arg)
-            .arg(&work_tree_arg)
+            .arg("-C")
+            .arg(&self.path)
             .arg("diff")
             .arg("--numstat")
             .output();
@@ -170,8 +167,8 @@ impl Worktree {
         status_indicators.push(format!("{}/-{}", total_insertions, total_deletions));
 
         let untracked_status_output = std::process::Command::new("git")
-            .arg(&git_dir_arg)
-            .arg(&work_tree_arg)
+            .arg("-C")
+            .arg(&self.path)
             .arg("status")
             .arg("--porcelain=v1")
             .output();
@@ -185,8 +182,8 @@ impl Worktree {
         }
 
         let unpushed_output = std::process::Command::new("git")
-            .arg(&git_dir_arg)
-            .arg(&work_tree_arg)
+            .arg("-C")
+            .arg(&self.path)
             .arg("cherry")
             .arg("-v")
             .output();

@@ -35,6 +35,7 @@ pub struct App {
     pub completion_idx: Option<usize>,
     pub sessions: HashMap<Selection, Session>,
     pub terminal_warning: Option<String>,
+    pub worktree_status: HashMap<(usize, usize), String>,
 }
 
 impl App {
@@ -53,11 +54,22 @@ impl App {
             completion_idx: None,
             sessions: HashMap::new(),
             terminal_warning: None,
+            worktree_status: HashMap::new(),
         };
         if !app.config.projects.is_empty() {
             app.tree_state.select(Some(0));
         }
+        app.refresh_worktree_status();
         app
+    }
+
+    pub fn refresh_worktree_status(&mut self) {
+        self.worktree_status.clear();
+        for (p_idx, project) in self.config.projects.iter().enumerate() {
+            for (w_idx, wt) in project.worktrees.iter().enumerate() {
+                self.worktree_status.insert((p_idx, w_idx), wt.get_status());
+            }
+        }
     }
 
     pub fn save_config(&self) {
@@ -79,7 +91,10 @@ impl App {
                 } else {
                     "├── "
                 };
-                let status_str = wt.get_status();
+                let status_str = self.worktree_status
+                    .get(&(p_idx, w_idx))
+                    .map(|s| s.as_str())
+                    .unwrap_or("...");
                 let style = if status_str == "clean" {
                     Style::default().fg(Color::Green)
                 } else {
@@ -192,6 +207,7 @@ mod tests {
             completion_idx: None,
             sessions: HashMap::new(),
             terminal_warning: None,
+            worktree_status: HashMap::new(),
         };
 
         app.config.projects.push(Project {
@@ -245,6 +261,7 @@ mod tests {
             completion_idx: None,
             sessions: HashMap::new(),
             terminal_warning: None,
+            worktree_status: HashMap::new(),
         };
 
         app.config.projects.push(Project {
@@ -297,6 +314,7 @@ mod tests {
             completion_idx: None,
             sessions: HashMap::new(),
             terminal_warning: None,
+            worktree_status: HashMap::new(),
         };
 
         let items = app.get_tree_items();
@@ -329,6 +347,7 @@ mod tests {
             completion_idx: None,
             sessions: HashMap::new(),
             terminal_warning: None,
+            worktree_status: HashMap::new(),
         };
 
         app.update_completions();
@@ -361,6 +380,7 @@ mod tests {
             completion_idx: None,
             sessions: HashMap::new(),
             terminal_warning: None,
+            worktree_status: HashMap::new(),
         };
 
         // We need a selected worktree to have a session

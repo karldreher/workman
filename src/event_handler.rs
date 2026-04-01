@@ -69,14 +69,7 @@ pub async fn handle_key_event(
             }
             KeyCode::Char('r') => {
                 if let Some(sel @ Selection::Worktree(_p_idx, _w_idx)) = app.get_selected_selection() {
-                    let p_idx = match sel {
-                        Selection::Worktree(p, _) => p,
-                        _ => unreachable!(), // This case is prevented by the if let Some
-                    };
-                    let w_idx = match sel {
-                        Selection::Worktree(_, w) => w,
-                        _ => unreachable!(), // This case is prevented by the if let Some
-                    };
+                    let Selection::Worktree(p_idx, w_idx) = sel else { unreachable!() };
 
                     match app.config.projects[p_idx].remove_worktree(w_idx) {
                         Ok(out) => {
@@ -93,6 +86,7 @@ pub async fn handle_key_event(
                             if out.status.success() {
                                 app.config.projects[p_idx].worktrees.remove(w_idx);
                                 app.save_config();
+                                app.refresh_worktree_status();
                                 app.error_message = None;
                                 app.full_error_detail = None;
                                 if app.config.projects[p_idx].worktrees.is_empty() {
@@ -314,6 +308,7 @@ pub async fn handle_key_event(
                                 path: wt_path,
                             });
                             app.save_config();
+                            app.refresh_worktree_status();
                             app.input_mode = InputMode::Normal;
                             app.error_message = None;
                             app.full_error_detail = None;
@@ -400,12 +395,13 @@ pub async fn handle_key_event(
                             } else {
                                 // Success: prepend success message to output
                                 let mut success_output = "Push successful!\n".to_string().into_bytes();
-                                success_output.extend(full_output.clone());
+                                success_output.extend(full_output);
                                 if let Some(session) = app.sessions.get(&sel) {
                                     session.parser.lock().unwrap().process(&success_output);
                                 } else {
                                     app.command_output = String::from_utf8_lossy(&success_output).lines().map(String::from).collect();
                                 }
+                                app.refresh_worktree_status();
                                 app.error_message = None;
                                 app.full_error_detail = None;
                             }
