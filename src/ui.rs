@@ -26,11 +26,9 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
         .map(|(text, _, style)| ListItem::new(text.as_str()).style(*style))
         .collect();
 
-    let tree_title = "Repos & Worktrees".to_string();
-
     let tree_block = Block::default()
         .borders(Borders::ALL)
-        .title(tree_title.as_str())
+        .title("Repos & Worktrees")
         .border_style(if app.input_mode == InputMode::Normal { Style::default().fg(Color::Yellow) } else { Style::default() }); // Highlight if in normal mode
 
     let tree_list = List::new(tree_items)
@@ -107,7 +105,7 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
         .title(if app.input_mode == InputMode::Terminal { "Terminal (Attached)" } else { "Output / Terminal" })
         .border_style(if app.input_mode != InputMode::Normal { Style::default().fg(Color::Yellow) } else { Style::default() }); // Highlight if active input mode
 
-    let selected = app.get_selected_selection();
+    let selected = app.tree_state.selected().and_then(|i| items_with_data.get(i).map(|item| item.1));
     if let Some(sel) = selected {
         if let Some(session) = app.sessions.get(&sel) {
             let parser = session.parser.lock().unwrap();
@@ -189,7 +187,7 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
             _ => "> ".to_string(), // Fallback for other potential input modes
         };
         output_content_lines.push(format!("{}{}", prompt, app.input));
-    } else if app.input_mode == InputMode::Normal && app.input.len() > 0 {
+    } else if app.input_mode == InputMode::Normal && !app.input.is_empty() {
          // Show pending input even in normal mode if something was typed and not submitted/cleared
          output_content_lines.push(format!("> {}", app.input));
     }
