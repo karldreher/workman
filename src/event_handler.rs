@@ -62,37 +62,6 @@ pub async fn handle_key_event(
                 app.full_error_detail = None;
             }
 
-            // Remove repo from global pool
-            KeyCode::Char('x') => {
-                if let Some(Selection::Repo(r_idx)) = app.get_selected_selection() {
-                    let repo_name = app.config.repos[r_idx].name.clone();
-                    // Warn if referenced by any project
-                    let used_in: Vec<String> = app.config.projects.iter()
-                        .filter(|p| p.worktrees.iter().any(|wt| wt.repo_name == repo_name))
-                        .map(|p| p.name.clone())
-                        .collect();
-                    if !used_in.is_empty() {
-                        app.error_message = Some(format!(
-                            "Repo '{}' is used in: {}. Remove those worktrees first.",
-                            repo_name, used_in.join(", ")
-                        ));
-                    } else {
-                        app.config.repos.remove(r_idx);
-                        app.save_config();
-                        // Reselect
-                        let items = app.get_tree_items();
-                        if items.is_empty() {
-                            app.tree_state.select(None);
-                        } else {
-                            let new_idx = (r_idx).min(items.len().saturating_sub(1));
-                            app.tree_state.select(Some(new_idx));
-                        }
-                        app.error_message = None;
-                        app.full_error_detail = None;
-                    }
-                }
-            }
-
             // Add worktrees to existing project (or expand if no repos to add)
             KeyCode::Char('w') => {
                 if let Some(Selection::Project(p_idx)) = app.get_selected_selection() {
@@ -330,12 +299,6 @@ pub async fn handle_key_event(
                             app.config.repos.push(crate::models::Repo { name, path: abs_path });
                             app.save_config();
                             app.input_mode = InputMode::Normal;
-                            let items = app.get_tree_items();
-                            if let Some(idx) = items.iter().position(|(_, sel, _)| {
-                                matches!(sel, Selection::Repo(i) if *i == app.config.repos.len() - 1)
-                            }) {
-                                app.tree_state.select(Some(idx));
-                            }
                             app.error_message = None;
                             app.full_error_detail = None;
                         }

@@ -20,19 +20,12 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
     let items_with_data = app.get_tree_items();
     let tree_items: Vec<ListItem> = items_with_data
         .iter()
-        .map(|(text, sel, style)| {
-            let s = if *sel == Selection::Separator {
-                style.add_modifier(Modifier::DIM)
-            } else {
-                *style
-            };
-            ListItem::new(text.as_str()).style(s)
-        })
+        .map(|(text, _sel, style)| ListItem::new(text.as_str()).style(*style))
         .collect();
 
     let tree_block = Block::default()
         .borders(Borders::ALL)
-        .title(" Projects & Repos ")
+        .title(" Projects ")
         .border_style(if app.input_mode == InputMode::Normal {
             Style::default().fg(Color::Yellow)
         } else {
@@ -191,8 +184,9 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
     // Contextual hints when output pane is otherwise empty
     if output_lines.is_empty() && app.input_mode == InputMode::Normal {
         let hint_style = Style::default().fg(Color::DarkGray);
+        let repo_count = app.config.repos.len();
         match app.get_selected_selection() {
-            None if app.config.projects.is_empty() && app.config.repos.is_empty() => {
+            None if app.config.projects.is_empty() => {
                 output_lines.push(Line::from(""));
                 output_lines.push(Line::from(Span::styled("  Welcome to workman!", Style::default().fg(Color::Cyan))));
                 output_lines.push(Line::from(""));
@@ -200,18 +194,30 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
                 output_lines.push(Line::from(Span::styled("    n  Create a new project", hint_style)));
                 output_lines.push(Line::from(Span::styled("    a  Add a repo to the global pool", hint_style)));
                 output_lines.push(Line::from(Span::styled("    h  Show full keybinding reference", hint_style)));
-            }
-            None if app.config.projects.is_empty() => {
-                output_lines.push(Line::from(""));
-                output_lines.push(Line::from(Span::styled("  Repos are registered. Now create a project:", hint_style)));
-                output_lines.push(Line::from(Span::styled("    n  Create a new project", hint_style)));
-                output_lines.push(Line::from(Span::styled("    h  Show full keybinding reference", hint_style)));
+                if repo_count > 0 {
+                    output_lines.push(Line::from(""));
+                    output_lines.push(Line::from(Span::styled(
+                        format!("  {} repo(s) in pool — press 'n' to create a project", repo_count),
+                        hint_style,
+                    )));
+                }
             }
             Some(Selection::Project(p_idx)) if app.config.projects[p_idx].worktrees.is_empty() => {
                 output_lines.push(Line::from(""));
                 output_lines.push(Line::from(Span::styled("  This project has no worktrees yet.", hint_style)));
-                output_lines.push(Line::from(Span::styled("    a  Add a repo to the pool (if none registered)", hint_style)));
-                output_lines.push(Line::from(Span::styled("    w  Add repos to this project (creates worktrees)", hint_style)));
+                if repo_count == 0 {
+                    output_lines.push(Line::from(Span::styled("    a  Add a repo to the pool first", hint_style)));
+                }
+                output_lines.push(Line::from(Span::styled("    w  Add repos → creates worktrees on project branch", hint_style)));
+            }
+            Some(Selection::Project(_)) => {
+                if repo_count > 0 {
+                    output_lines.push(Line::from(""));
+                    output_lines.push(Line::from(Span::styled(
+                        format!("  {} repo(s) in pool", repo_count),
+                        hint_style,
+                    )));
+                }
             }
             _ => {}
         }
@@ -234,11 +240,8 @@ fn build_help_lines(app: &App) -> Vec<Line<'static>> {
                 Some(Selection::Worktree(_, _)) => {
                     lines.push(Line::from(" [c] terminal  [p] push  [d] diff  [r] remove worktree"));
                 }
-                Some(Selection::Repo(_)) => {
-                    lines.push(Line::from(" [x] remove repo"));
-                }
                 _ => {
-                    lines.push(Line::from(" No selection"));
+                    lines.push(Line::from(" [n] new project  [a] add repo  [h] help"));
                 }
             }
             lines.push(Line::from(" [n] new project  [a] add repo  [o] options  [h] help  [q] quit"));
@@ -395,8 +398,6 @@ fn render_help(
         row!("d", "Show diff (Space: scroll, Esc: exit)"),
         row!("r", "Remove this worktree"),
         Line::from(""),
-        Line::from(Span::styled(" Repo selected", h)),
-        row!("x", "Remove repo from global pool"),
         Line::from(""),
         Line::from(Span::styled(" Terminal mode (in-app PTY)", h)),
         row!("Esc", "Detach — session stays alive"),

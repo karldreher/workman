@@ -10,8 +10,6 @@ use std::path::PathBuf;
 pub enum Selection {
     Project(usize),
     Worktree(usize, usize), // (project_idx, worktree_idx)
-    Repo(usize),
-    Separator, // visual only — skipped during navigation
 }
 
 #[derive(PartialEq)]
@@ -153,22 +151,6 @@ impl App {
             }
         }
 
-        // Repos section
-        if !self.config.repos.is_empty() {
-            items.push((
-                "── Repos ──".to_string(),
-                Selection::Separator,
-                Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
-            ));
-            for (r_idx, repo) in self.config.repos.iter().enumerate() {
-                items.push((
-                    format!("  {} ({})", repo.name, repo.path.display()),
-                    Selection::Repo(r_idx),
-                    Style::default().fg(Color::DarkGray),
-                ));
-            }
-        }
-
         items
     }
 
@@ -217,21 +199,10 @@ impl App {
         if items.is_empty() {
             return;
         }
-        let mut i = match self.tree_state.selected() {
-            Some(i) => {
-                if i >= items.len() - 1 { 0 } else { i + 1 }
-            }
+        let i = match self.tree_state.selected() {
+            Some(i) => if i >= items.len() - 1 { 0 } else { i + 1 },
             None => 0,
         };
-        // Skip over non-navigable separator items
-        let mut guard = 0;
-        while items.get(i).map(|item| item.1 == Selection::Separator).unwrap_or(false) {
-            i = if i >= items.len() - 1 { 0 } else { i + 1 };
-            guard += 1;
-            if guard > items.len() {
-                break;
-            }
-        }
         self.tree_state.select(Some(i));
         self.error_message = None;
         self.full_error_detail = None;
@@ -242,21 +213,10 @@ impl App {
         if items.is_empty() {
             return;
         }
-        let mut i = match self.tree_state.selected() {
-            Some(i) => {
-                if i == 0 { items.len() - 1 } else { i - 1 }
-            }
+        let i = match self.tree_state.selected() {
+            Some(i) => if i == 0 { items.len() - 1 } else { i - 1 },
             None => 0,
         };
-        // Skip over non-navigable separator items
-        let mut guard = 0;
-        while items.get(i).map(|item| item.1 == Selection::Separator).unwrap_or(false) {
-            i = if i == 0 { items.len() - 1 } else { i - 1 };
-            guard += 1;
-            if guard > items.len() {
-                break;
-            }
-        }
         self.tree_state.select(Some(i));
         self.error_message = None;
         self.full_error_detail = None;
@@ -344,29 +304,6 @@ mod tests {
     }
 
     #[test]
-    fn test_separator_skipped_in_navigation() {
-        let mut app = make_test_app();
-
-        app.config.repos.push(Repo {
-            name: "myrepo".to_string(),
-            path: PathBuf::from("/myrepo"),
-        });
-
-        let items = app.get_tree_items();
-        // Separator + Repo(0) = 2 items; no projects
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].1, Selection::Separator);
-        assert_eq!(items[1].1, Selection::Repo(0));
-
-        // Starting at separator, next should land on Repo
-        app.tree_state.select(Some(0));
-        app.next();
-        // Should skip separator and land on Repo or wrap
-        let sel = app.get_selected_selection();
-        assert_ne!(sel, Some(Selection::Separator));
-    }
-
-    #[test]
     fn test_get_tree_items_with_repos_and_projects() {
         let mut app = make_test_app();
 
@@ -385,12 +322,10 @@ mod tests {
         app.expanded_projects.insert(0);
 
         let items = app.get_tree_items();
-        // Project(0) + Worktree(0,0) + Separator + Repo(0) = 4
-        assert_eq!(items.len(), 4);
+        // Project(0) + Worktree(0,0) = 2 items (repos are not shown in main tree)
+        assert_eq!(items.len(), 2);
         assert_eq!(items[0].1, Selection::Project(0));
         assert_eq!(items[1].1, Selection::Worktree(0, 0));
-        assert_eq!(items[2].1, Selection::Separator);
-        assert_eq!(items[3].1, Selection::Repo(0));
         // Worktree label should contain repo name and branch
         assert!(items[1].0.contains("frontend"));
         assert!(items[1].0.contains("feat/my-feature"));
