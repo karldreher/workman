@@ -25,6 +25,7 @@ pub enum InputMode {
     EditingCommitMessage,
     Terminal,
     Options,
+    Help,
 }
 
 pub struct App {

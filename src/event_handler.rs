@@ -46,16 +46,12 @@ pub async fn handle_key_event(
 
             // New project (3-step wizard)
             KeyCode::Char('n') => {
-                if app.config.repos.is_empty() {
-                    app.error_message = Some("Add at least one repo first ('a').".to_string());
-                } else {
-                    app.input_mode = InputMode::AddingProjectName;
-                    app.input.clear();
-                    app.pending_project_name.clear();
-                    app.pending_project_branch.clear();
-                    app.error_message = None;
-                    app.full_error_detail = None;
-                }
+                app.input_mode = InputMode::AddingProjectName;
+                app.input.clear();
+                app.pending_project_name.clear();
+                app.pending_project_branch.clear();
+                app.error_message = None;
+                app.full_error_detail = None;
             }
 
             // Add repo to global pool
@@ -238,6 +234,12 @@ pub async fn handle_key_event(
                 app.error_message = None;
             }
 
+            // Help view
+            KeyCode::Char('h') => {
+                app.input_mode = InputMode::Help;
+                app.error_message = None;
+            }
+
             // Expand/collapse project
             KeyCode::Enter => {
                 if let Some(Selection::Project(p_idx)) = app.get_selected_selection() {
@@ -306,6 +308,11 @@ pub async fn handle_key_event(
             }
             _ => {}
         },
+
+        // ── Help view ─────────────────────────────────────────────────────
+        InputMode::Help => {
+            app.input_mode = InputMode::Normal;
+        }
 
         // ── Adding repo path ──────────────────────────────────────────────
         InputMode::AddingRepoPath => match key.code {
@@ -404,12 +411,36 @@ pub async fn handle_key_event(
                 } else {
                     app.pending_project_branch = branch;
                     app.input.clear();
-                    // Move to repo selection
-                    app.adding_to_project = None;
-                    app.repo_selection = vec![false; app.config.repos.len()];
-                    app.repo_cursor = 0;
-                    app.input_mode = InputMode::SelectingRepos;
-                    app.error_message = None;
+                    if app.config.repos.is_empty() {
+                        // No repos yet — create empty project immediately
+                        let project_name = app.pending_project_name.clone();
+                        let project_branch = app.pending_project_branch.clone();
+                        let folder = Project::make_folder_path(&project_name);
+                        let project = Project {
+                            name: project_name.clone(),
+                            branch: project_branch,
+                            worktrees: Vec::new(),
+                            folder: folder.clone(),
+                        };
+                        let _ = project.create_folder();
+                        app.config.projects.push(project);
+                        let new_p_idx = app.config.projects.len() - 1;
+                        app.expanded_projects.insert(new_p_idx);
+                        app.save_config();
+                        let items = app.get_tree_items();
+                        if let Some(idx) = items.iter().position(|(_, s, _)| *s == Selection::Project(new_p_idx)) {
+                            app.tree_state.select(Some(idx));
+                        }
+                        app.input_mode = InputMode::Normal;
+                        app.error_message = Some("Project created. Add repos with 'a', then add worktrees with 'w'.".to_string());
+                    } else {
+                        // Move to repo selection
+                        app.adding_to_project = None;
+                        app.repo_selection = vec![false; app.config.repos.len()];
+                        app.repo_cursor = 0;
+                        app.input_mode = InputMode::SelectingRepos;
+                        app.error_message = None;
+                    }
                 }
             }
             KeyCode::Char(c) => { app.input.push(c); app.error_message = None; }
@@ -607,7 +638,33 @@ fn handle_confirm_repo_selection(app: &mut App) {
         .collect();
 
     if selected_repo_indices.is_empty() {
-        app.error_message = Some("No repos selected. Use Space to select.".to_string());
+        if app.adding_to_project.is_some() {
+            app.error_message = Some("No repos selected. Use Space to select.".to_string());
+            return;
+        }
+        // Creating a new project with no repos selected — create empty project
+        let project_name = app.pending_project_name.clone();
+        let project_branch = app.pending_project_branch.clone();
+        let folder = Project::make_folder_path(&project_name);
+        let project = Project {
+            name: project_name.clone(),
+            branch: project_branch,
+            worktrees: Vec::new(),
+            folder: folder.clone(),
+        };
+        let _ = project.create_folder();
+        app.config.projects.push(project);
+        let new_p_idx = app.config.projects.len() - 1;
+        app.expanded_projects.insert(new_p_idx);
+        app.save_config();
+        let items = app.get_tree_items();
+        if let Some(idx) = items.iter().position(|(_, s, _)| *s == Selection::Project(new_p_idx)) {
+            app.tree_state.select(Some(idx));
+        }
+        app.input_mode = InputMode::Normal;
+        app.repo_selection.clear();
+        app.adding_to_project = None;
+        app.error_message = Some("Project created with no repos. Use 'w' to add worktrees.".to_string());
         return;
     }
 

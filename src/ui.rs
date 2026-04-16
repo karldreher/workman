@@ -73,6 +73,7 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
         InputMode::Terminal => " Terminal (Attached) ",
         InputMode::SelectingRepos => " Select Repos ",
         InputMode::Options => " Options ",
+        InputMode::Help => " Help ",
         _ => " Output ",
     };
     let output_block = Block::default()
@@ -93,6 +94,12 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
     // Options overlay
     if app.input_mode == InputMode::Options {
         render_options(f, app, output_block, right_chunks[1]);
+        return;
+    }
+
+    // Help view
+    if app.input_mode == InputMode::Help {
+        render_help(f, output_block, right_chunks[1]);
         return;
     }
 
@@ -135,12 +142,18 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
     }
 
     // Standard output / input prompt rendering
-    let mut output_lines: Vec<String> = Vec::new();
+    let mut output_lines: Vec<Line> = Vec::new();
 
     if let Some(err) = &app.error_message {
-        output_lines.push(format!("ERROR: {}", err));
+        output_lines.push(Line::from(Span::styled(
+            format!("  {}", err),
+            Style::default().fg(Color::Yellow),
+        )));
         if let Some(detail) = &app.full_error_detail {
-            output_lines.push(format!("DETAIL: {}", detail));
+            output_lines.push(Line::from(Span::styled(
+                format!("  DETAIL: {}", detail),
+                Style::default().fg(Color::DarkGray),
+            )));
         }
     }
 
@@ -149,29 +162,62 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
             let num_display_lines = right_chunks[1].height.saturating_sub(2) as usize;
             let start = app.diff_scroll_offset;
             let end = (start + num_display_lines).min(app.command_output.len());
-            output_lines.extend(app.command_output[start..end].iter().cloned());
+            for line in &app.command_output[start..end] {
+                output_lines.push(Line::from(line.as_str()));
+            }
         } else {
-            output_lines.extend(app.command_output.iter().cloned());
+            for line in &app.command_output {
+                output_lines.push(Line::from(line.as_str()));
+            }
         }
     }
 
     match app.input_mode {
         InputMode::AddingRepoPath => {
-            output_lines.push(format!("Repo path> {}", app.input));
+            output_lines.push(Line::from(format!("  Repo path> {}", app.input)));
         }
         InputMode::AddingProjectName => {
-            output_lines.push(format!("Project name> {}", app.input));
+            output_lines.push(Line::from(format!("  Project name> {}", app.input)));
         }
         InputMode::AddingProjectBranch => {
-            output_lines.push(format!("Branch name> {}", app.input));
+            output_lines.push(Line::from(format!("  Branch name> {}", app.input)));
         }
         InputMode::EditingCommitMessage => {
-            output_lines.push(format!("Commit msg> {}", app.input));
+            output_lines.push(Line::from(format!("  Commit msg> {}", app.input)));
         }
         _ => {}
     }
 
-    let output_paragraph = Paragraph::new(output_lines.join("\n"))
+    // Contextual hints when output pane is otherwise empty
+    if output_lines.is_empty() && app.input_mode == InputMode::Normal {
+        let hint_style = Style::default().fg(Color::DarkGray);
+        match app.get_selected_selection() {
+            None if app.config.projects.is_empty() && app.config.repos.is_empty() => {
+                output_lines.push(Line::from(""));
+                output_lines.push(Line::from(Span::styled("  Welcome to workman!", Style::default().fg(Color::Cyan))));
+                output_lines.push(Line::from(""));
+                output_lines.push(Line::from(Span::styled("  Get started:", hint_style)));
+                output_lines.push(Line::from(Span::styled("    n  Create a new project", hint_style)));
+                output_lines.push(Line::from(Span::styled("    a  Add a repo to the global pool", hint_style)));
+                output_lines.push(Line::from(Span::styled("    h  Show full keybinding reference", hint_style)));
+            }
+            None if app.config.projects.is_empty() => {
+                output_lines.push(Line::from(""));
+                output_lines.push(Line::from(Span::styled("  Repos are registered. Now create a project:", hint_style)));
+                output_lines.push(Line::from(Span::styled("    n  Create a new project", hint_style)));
+                output_lines.push(Line::from(Span::styled("    h  Show full keybinding reference", hint_style)));
+            }
+            Some(Selection::Project(p_idx)) if app.config.projects[p_idx].worktrees.is_empty() => {
+                output_lines.push(Line::from(""));
+                output_lines.push(Line::from(Span::styled("  This project has no worktrees yet.", hint_style)));
+                output_lines.push(Line::from(Span::styled("    a  Add a repo to the pool (if none registered)", hint_style)));
+                output_lines.push(Line::from(Span::styled("    w  Add repos to this project (creates worktrees)", hint_style)));
+            }
+            _ => {}
+        }
+    }
+
+    let output_paragraph = Paragraph::new(output_lines)
         .block(output_block)
         .wrap(ratatui::widgets::Wrap { trim: false });
     f.render_widget(output_paragraph, right_chunks[1]);
@@ -195,7 +241,7 @@ fn build_help_lines(app: &App) -> Vec<Line<'static>> {
                     lines.push(Line::from(" No selection"));
                 }
             }
-            lines.push(Line::from(" [n] new project  [a] add repo  [o] options  [q] quit  [Ctrl+L] export log"));
+            lines.push(Line::from(" [n] new project  [a] add repo  [o] options  [h] help  [q] quit"));
         }
         InputMode::AddingRepoPath => {
             lines.push(Line::from(" Enter repo path (Tab: autocomplete, Enter: confirm, Esc: cancel)"));
@@ -226,6 +272,9 @@ fn build_help_lines(app: &App) -> Vec<Line<'static>> {
         }
         InputMode::Options => {
             lines.push(Line::from(" ↑/↓ navigate  Space/Enter: toggle  Esc: close"));
+        }
+        InputMode::Help => {
+            lines.push(Line::from(" Any key: close help"));
         }
     }
     lines
@@ -299,6 +348,65 @@ fn render_options(
         format!("{}{}  Use Tmux  (replaces built-in terminal with tmux sessions)", tmux_cursor, tmux_checked),
         tmux_style,
     )));
+
+    let paragraph = Paragraph::new(lines).block(block);
+    f.render_widget(paragraph, area);
+}
+
+fn render_help(
+    f: &mut ratatui::Frame,
+    block: Block,
+    area: ratatui::layout::Rect,
+) {
+    let h = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+    let k = Style::default().fg(Color::Yellow);
+    let d = Style::default();
+    let dim = Style::default().fg(Color::DarkGray);
+
+    macro_rules! row {
+        ($key:expr, $desc:expr) => {
+            Line::from(vec![
+                Span::styled(format!("  {:20}", $key), k),
+                Span::styled($desc, d),
+            ])
+        };
+    }
+
+    let lines: Vec<Line> = vec![
+        Line::from(Span::styled(" Global", h)),
+        row!("q / Ctrl+C", "Quit"),
+        row!("↑ / ↓", "Navigate list"),
+        row!("n", "New project (name → branch → select repos)"),
+        row!("a", "Add repo to global pool"),
+        row!("o", "Options (toggle tmux, etc.)"),
+        row!("h", "This help screen"),
+        row!("Ctrl+L", "Export error log to /tmp/workman.log"),
+        Line::from(""),
+        Line::from(Span::styled(" Project selected", h)),
+        row!("Enter", "Expand / collapse"),
+        row!("w", "Add repos → create worktrees on project branch"),
+        row!("p", "Push all worktrees (prompts for commit msg)"),
+        row!("c", "Open terminal at project folder"),
+        row!("r", "Delete project (all worktrees + folder)"),
+        Line::from(""),
+        Line::from(Span::styled(" Worktree selected", h)),
+        row!("c", "Open terminal in worktree"),
+        row!("p", "Push this worktree"),
+        row!("d", "Show diff (Space: scroll, Esc: exit)"),
+        row!("r", "Remove this worktree"),
+        Line::from(""),
+        Line::from(Span::styled(" Repo selected", h)),
+        row!("x", "Remove repo from global pool"),
+        Line::from(""),
+        Line::from(Span::styled(" Terminal mode (in-app PTY)", h)),
+        row!("Esc", "Detach — session stays alive"),
+        row!("Ctrl+C", "Send interrupt to shell"),
+        Line::from(""),
+        Line::from(Span::styled(" Tmux mode (Use Tmux = on)", h)),
+        row!("Ctrl-B D", "Detach from tmux session"),
+        Line::from(""),
+        Line::from(Span::styled("  Press any key to close", dim)),
+    ];
 
     let paragraph = Paragraph::new(lines).block(block);
     f.render_widget(paragraph, area);
