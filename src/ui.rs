@@ -44,7 +44,7 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
     let right_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
+            Constraint::Length(4), // 2 content rows + top/bottom borders
             Constraint::Min(0),
         ].as_ref())
         .split(main_layout[1]);
@@ -202,13 +202,12 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
                 output_lines.push(Line::from(""));
                 output_lines.push(Line::from(Span::styled("  Welcome to workman!", Style::default().fg(Color::Cyan))));
                 output_lines.push(Line::from(""));
-                output_lines.push(Line::from(Span::styled("  n  Create a project", hint_style)));
-                output_lines.push(Line::from(Span::styled("  h  Show keybinding reference", hint_style)));
+                output_lines.push(Line::from(Span::styled("  (n)ew project  (h)elp", hint_style)));
             }
             Some(Selection::Project(p_idx)) if app.config.projects[p_idx].worktrees.is_empty() => {
                 output_lines.push(Line::from(""));
                 output_lines.push(Line::from(Span::styled("  No repos in this project yet.", hint_style)));
-                output_lines.push(Line::from(Span::styled("  w  Add a repo (creates worktree on project branch)", hint_style)));
+                output_lines.push(Line::from(Span::styled("  (a)dd a repo — creates a worktree on the project branch", hint_style)));
             }
             _ => {}
         }
@@ -220,49 +219,143 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
     f.render_widget(output_paragraph, right_chunks[1]);
 }
 
+/// Renders a `(k)ey label` shortcut span group.
+/// `key` is the letter shown in parens; `rest` is the remainder of the label.
+fn kv(key: &'static str, rest: &'static str) -> Vec<Span<'static>> {
+    let ks = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+    vec![
+        Span::raw("("),
+        Span::styled(key, ks),
+        Span::raw(format!("){rest}  ")),
+    ]
+}
+
+/// Renders a named key (like Enter or Esc) followed by a label.
+fn named_key(key: &'static str, label: &'static str) -> Vec<Span<'static>> {
+    let ks = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+    vec![
+        Span::styled(key, ks),
+        Span::raw(format!(" {label}  ")),
+    ]
+}
+
 fn build_help_lines(app: &App) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = Vec::new();
     match app.input_mode {
         InputMode::Normal => {
+            // Line 1: context-specific shortcuts
             match app.get_selected_selection() {
                 Some(Selection::Project(_)) => {
-                    lines.push(Line::from(" [Enter] expand/collapse  [w] add repo  [r] delete project  [p] push all  [c] terminal"));
+                    let ks = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+                    let mut spans: Vec<Span> = vec![Span::raw(" ")];
+                    spans.extend(named_key("Enter", "expand"));
+                    spans.extend(kv("a", "dd repo"));
+                    spans.extend(kv("t", "erminal"));
+                    spans.extend(kv("p", "ush all"));
+                    spans.extend([Span::raw("("), Span::styled("x", ks), Span::raw(") remove  ")]);
+                    lines.push(Line::from(spans));
                 }
                 Some(Selection::Worktree(_, _)) => {
-                    lines.push(Line::from(" [c] terminal  [p] push  [d] diff  [r] remove worktree"));
+                    let ks = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
+                    let mut spans: Vec<Span> = vec![Span::raw(" ")];
+                    spans.extend(kv("t", "erminal"));
+                    spans.extend(kv("p", "ush"));
+                    spans.extend(kv("d", "iff"));
+                    spans.extend([Span::raw("("), Span::styled("x", ks), Span::raw(") remove  ")]);
+                    lines.push(Line::from(spans));
                 }
                 _ => {
-                    lines.push(Line::from(" [n] new project  [h] help"));
+                    // No selection — global line handles everything; push empty first line
+                    lines.push(Line::from(""));
                 }
             }
-            lines.push(Line::from(" [n] new project  [o] options  [h] help  [q] quit"));
+            // Line 2: always-visible global shortcuts
+            let mut global: Vec<Span> = vec![Span::raw(" ")];
+            global.extend(kv("n", "ew project"));
+            global.extend(kv("o", "ptions"));
+            global.extend(kv("h", "elp"));
+            global.extend(kv("q", "uit"));
+            lines.push(Line::from(global));
         }
         InputMode::AddingProjectName => {
-            lines.push(Line::from(" Enter a name for the project (Enter: create, Esc: cancel)"));
+            lines.push(Line::from(" Enter a name for the project"));
+            lines.push(Line::from(vec![
+                Span::raw(" "),
+                Span::styled("Enter", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" create   "),
+                Span::styled("Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" cancel"),
+            ]));
         }
         InputMode::AddingRepo => {
-            lines.push(Line::from(" Type path or ↑/↓ to pick suggestion  Enter: add  Enter (empty): done  Esc: cancel"));
+            lines.push(Line::from(" Type a path, or ↑/↓ to browse  Tab: complete path"));
+            lines.push(Line::from(vec![
+                Span::raw(" "),
+                Span::styled("Enter", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" add repo   "),
+                Span::styled("Enter", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" (empty) done   "),
+                Span::styled("Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" cancel"),
+            ]));
         }
         InputMode::ViewingDiff => {
-            lines.push(Line::from(" Viewing diff (Space: scroll, Esc: exit)"));
+            lines.push(Line::from(" Viewing diff"));
+            lines.push(Line::from(vec![
+                Span::raw(" "),
+                Span::styled("↑↓", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" scroll   "),
+                Span::styled("Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" exit"),
+            ]));
         }
         InputMode::EditingCommitMessage => {
-            lines.push(Line::from(" Enter commit message (blank = auto, Enter: confirm, Esc: cancel)"));
+            lines.push(Line::from(" Commit message (blank = auto-message)"));
+            lines.push(Line::from(vec![
+                Span::raw(" "),
+                Span::styled("Enter", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" confirm   "),
+                Span::styled("Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" cancel"),
+            ]));
         }
         InputMode::Terminal => {
             if let Some(warning) = &app.terminal_warning {
-                lines.push(Line::from(vec![
-                    Span::styled(format!(" {}", warning), Style::default().fg(Color::Yellow)),
-                ]));
+                lines.push(Line::from(Span::styled(
+                    format!(" {}", warning),
+                    Style::default().fg(Color::Yellow),
+                )));
+                lines.push(Line::from(""));
             } else {
-                lines.push(Line::from(" Terminal mode (Esc: detach, Ctrl-B D: detach tmux)"));
+                lines.push(Line::from(" Terminal attached"));
+                lines.push(Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled("Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                    Span::raw(" detach   "),
+                    Span::styled("Ctrl-B D", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                    Span::raw(" detach tmux"),
+                ]));
             }
         }
         InputMode::Options => {
-            lines.push(Line::from(" ↑/↓ navigate  Space/Enter: toggle  Esc: close"));
+            lines.push(Line::from(" Settings"));
+            lines.push(Line::from(vec![
+                Span::raw(" "),
+                Span::styled("↑↓", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" navigate   "),
+                Span::styled("Space", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" toggle   "),
+                Span::styled("Esc", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" close"),
+            ]));
         }
         InputMode::Help => {
-            lines.push(Line::from(" Any key: close help"));
+            lines.push(Line::from(" Key reference"));
+            lines.push(Line::from(vec![
+                Span::raw(" "),
+                Span::styled("Any key", Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Span::raw(" close"),
+            ]));
         }
     }
     lines
@@ -413,27 +506,26 @@ fn render_help(
     let lines: Vec<Line> = vec![
         Line::from(Span::styled(" Global", h)),
         row!("q / Ctrl+C", "Quit"),
-        row!("↑ / ↓", "Navigate list"),
-        row!("n", "New project (name → add repos)"),
-        row!("o", "Options (toggle tmux, etc.)"),
-        row!("h", "This help screen"),
-        row!("Ctrl+L", "Export error log to /tmp/workman.log"),
+        row!("↑ / ↓", "Navigate"),
+        row!("n", "(n)ew project"),
+        row!("o", "(o)ptions"),
+        row!("h", "(h)elp — this screen"),
+        row!("Ctrl+L", "Export log to /tmp/workman.log"),
         Line::from(""),
         Line::from(Span::styled(" Project selected", h)),
         row!("Enter", "Expand / collapse"),
-        row!("w", "Add repos → create worktrees on project branch"),
-        row!("p", "Push all worktrees (prompts for commit msg)"),
-        row!("c", "Open terminal at project folder"),
-        row!("r", "Delete project (all worktrees + folder)"),
+        row!("a", "(a)dd repo — creates worktree on project branch"),
+        row!("p", "(p)ush all worktrees"),
+        row!("t", "(t)erminal at project folder"),
+        row!("x", "(x) remove project and all its worktrees"),
         Line::from(""),
         Line::from(Span::styled(" Worktree selected", h)),
-        row!("c", "Open terminal in worktree"),
-        row!("p", "Push this worktree"),
-        row!("d", "Show diff (Space: scroll, Esc: exit)"),
-        row!("r", "Remove this worktree"),
+        row!("t", "(t)erminal in worktree"),
+        row!("p", "(p)ush"),
+        row!("d", "(d)iff  (↑↓ scroll, Esc exit)"),
+        row!("x", "(x) remove worktree"),
         Line::from(""),
-        Line::from(""),
-        Line::from(Span::styled(" Terminal mode (in-app PTY)", h)),
+        Line::from(Span::styled(" Terminal (in-app PTY)", h)),
         row!("Esc", "Detach — session stays alive"),
         row!("Ctrl+C", "Send interrupt to shell"),
         Line::from(""),

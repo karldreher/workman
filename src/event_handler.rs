@@ -54,7 +54,7 @@ pub async fn handle_key_event(
             }
 
             // Add a repo to the selected project (opens fuzzy path picker)
-            KeyCode::Char('w') | KeyCode::Char('a') => {
+            KeyCode::Char('a') => {
                 if let Some(Selection::Project(p_idx)) = app.get_selected_selection() {
                     app.adding_to_project = Some(p_idx);
                     app.fuzzy_cursor = None;
@@ -69,7 +69,7 @@ pub async fn handle_key_event(
             }
 
             // Remove project (all worktrees + folder) or remove single worktree
-            KeyCode::Char('r') => {
+            KeyCode::Char('x') => {
                 match app.get_selected_selection() {
                     Some(Selection::Project(p_idx)) => {
                         handle_remove_project(app, p_idx);
@@ -82,7 +82,7 @@ pub async fn handle_key_event(
             }
 
             // Open terminal (worktree or project level)
-            KeyCode::Char('c') => {
+            KeyCode::Char('t') => {
                 match app.get_selected_selection() {
                     Some(sel @ Selection::Worktree(p_idx, w_idx)) => {
                         let wt_path = app.config.projects[p_idx].worktrees[w_idx].path.clone();
