@@ -1,5 +1,5 @@
 use crate::app::{App, FuzzyEntry, InputMode, Selection};
-use crate::shortcuts::{global_shortcuts, project_shortcuts, worktree_shortcuts, Shortcut};
+use crate::shortcuts::{GLOBAL_SHORTCUTS, PROJECT_SHORTCUTS, WORKTREE_SHORTCUTS, Shortcut};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
@@ -9,15 +9,47 @@ use ratatui::{
 use vt100::Color as Vt100Color;
 
 pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
-    let main_layout = Layout::default()
-        .direction(Direction::Horizontal)
+    // ── Root layout: full-width help bar at top, content area below ──────
+    let root_layout = Layout::default()
+        .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(60),
-            Constraint::Percentage(40),
-        ].as_ref())
+            Constraint::Length(8), // 6 inner rows + top/bottom borders
+            Constraint::Min(0),
+        ])
         .split(f.area());
 
-    // ── Left Panel: Project & Repo Tree ──────────────────────────────────
+    // ── Help bar (full width) — 60/40: description | shortcuts ──────────
+    let help_block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Help ")
+        .border_style(Style::default().fg(Color::LightBlue));
+
+    let help_inner = help_block.inner(root_layout[0]);
+    f.render_widget(help_block, root_layout[0]);
+
+    let help_split = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(help_inner);
+
+    f.render_widget(
+        Paragraph::new(context_description(app)).wrap(Wrap { trim: true }),
+        help_split[0],
+    );
+    f.render_widget(
+        Paragraph::new(context_shortcut_lines(app)),
+        help_split[1],
+    );
+
+    // ── Content area: 60% tree | 40% output ─────────────────────────────
+    let main_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .split(root_layout[1]);
+
+    let output_area = main_layout[1];
+
+    // ── Left Panel: Project tree ─────────────────────────────────────────
     let items_with_data = app.get_tree_items();
     let tree_items: Vec<ListItem> = items_with_data
         .iter()
@@ -35,45 +67,11 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
 
     let tree_list = List::new(tree_items)
         .block(tree_block)
-        .highlight_style(
-            Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan),
-        )
+        .highlight_style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Cyan))
         .highlight_symbol("> ");
     f.render_stateful_widget(tree_list, main_layout[0], &mut app.tree_state);
 
-    // ── Right Panel: Help bar + Output/Terminal ──────────────────────────
-    let right_chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(8), // 6 content rows + top/bottom borders
-            Constraint::Min(0),
-        ].as_ref())
-        .split(main_layout[1]);
-
-    // Help bar — 60/40 split: description (left) + shortcuts (right)
-    let help_block = Block::default()
-        .borders(Borders::ALL)
-        .title(" Help ")
-        .border_style(Style::default().fg(Color::LightBlue));
-
-    let help_inner = help_block.inner(right_chunks[0]);
-    f.render_widget(help_block, right_chunks[0]);
-
-    let help_split = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(help_inner);
-
-    f.render_widget(
-        Paragraph::new(context_description(app)).wrap(Wrap { trim: true }),
-        help_split[0],
-    );
-    f.render_widget(
-        Paragraph::new(context_shortcut_lines(app)),
-        help_split[1],
-    );
-
-    // Output / Terminal pane
+    // ── Right Panel: Output / Terminal ───────────────────────────────────
     let pane_title = match app.input_mode {
         InputMode::Terminal => " Terminal (Attached) ",
         InputMode::AddingRepo => " Add Repo ",
@@ -90,21 +88,16 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
             Style::default()
         });
 
-    // AddingRepo: fuzzy path picker
     if app.input_mode == InputMode::AddingRepo {
-        render_add_repo(f, app, output_block, right_chunks[1]);
+        render_add_repo(f, app, output_block, output_area);
         return;
     }
-
-    // Options overlay
     if app.input_mode == InputMode::Options {
-        render_options(f, app, output_block, right_chunks[1]);
+        render_options(f, app, output_block, output_area);
         return;
     }
-
-    // Help view
     if app.input_mode == InputMode::Help {
-        render_help(f, output_block, right_chunks[1]);
+        render_help(f, output_block, output_area);
         return;
     }
 
@@ -136,12 +129,10 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
             }
 
             let terminal_paragraph = Paragraph::new(lines).block(output_block);
-            f.render_widget(terminal_paragraph, right_chunks[1]);
+            f.render_widget(terminal_paragraph, output_area);
 
             let (cursor_row, cursor_col) = screen.cursor_position();
-            let cursor_x = right_chunks[1].x + 1 + cursor_col;
-            let cursor_y = right_chunks[1].y + 1 + cursor_row;
-            f.set_cursor_position((cursor_x, cursor_y));
+            f.set_cursor_position((output_area.x + 1 + cursor_col, output_area.y + 1 + cursor_row));
             return;
         }
     }
@@ -164,9 +155,9 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
 
     if !app.command_output.is_empty() {
         if app.input_mode == InputMode::ViewingDiff {
-            let num_display_lines = right_chunks[1].height.saturating_sub(2) as usize;
+            let num_lines = output_area.height.saturating_sub(2) as usize;
             let start = app.diff_scroll_offset;
-            let end = (start + num_display_lines).min(app.command_output.len());
+            let end = (start + num_lines).min(app.command_output.len());
             for line in &app.command_output[start..end] {
                 output_lines.push(Line::from(line.as_str()));
             }
@@ -192,20 +183,19 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
         _ => {}
     }
 
-    // Contextual hints when output pane is otherwise empty
+    // Contextual hints when output pane is empty
     if output_lines.is_empty() && app.input_mode == InputMode::Normal {
-        let hint_style = Style::default().fg(Color::DarkGray);
+        let hint = Style::default().fg(Color::DarkGray);
         match app.get_selected_selection() {
             None if app.config.projects.is_empty() => {
                 output_lines.push(Line::from(""));
                 output_lines.push(Line::from(Span::styled("  Welcome to workman!", Style::default().fg(Color::Cyan))));
                 output_lines.push(Line::from(""));
-                output_lines.push(Line::from(Span::styled("  (n)ew project  (h)elp", hint_style)));
+                output_lines.push(Line::from(Span::styled("  Press (n) to create your first project.", hint)));
             }
             Some(Selection::Project(p_idx)) if app.config.projects[p_idx].worktrees.is_empty() => {
                 output_lines.push(Line::from(""));
-                output_lines.push(Line::from(Span::styled("  No repos in this project yet.", hint_style)));
-                output_lines.push(Line::from(Span::styled("  (a)dd a repo — creates a worktree on the project branch", hint_style)));
+                output_lines.push(Line::from(Span::styled("  Press (a) to add a repo to this project.", hint)));
             }
             _ => {}
         }
@@ -213,8 +203,8 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
 
     let output_paragraph = Paragraph::new(output_lines)
         .block(output_block)
-        .wrap(ratatui::widgets::Wrap { trim: false });
-    f.render_widget(output_paragraph, right_chunks[1]);
+        .wrap(Wrap { trim: false });
+    f.render_widget(output_paragraph, output_area);
 }
 
 /// Renders a `Shortcut` as `(k)ey label` spans (no trailing padding — one per line).
@@ -343,13 +333,13 @@ fn context_shortcut_lines(app: &App) -> Vec<Line<'static>> {
         InputMode::Normal => match app.get_selected_selection() {
             Some(Selection::Project(_)) => {
                 let mut lines = vec![named_key_line("Enter", "expand")];
-                lines.extend(project_shortcuts().iter().map(|s| Line::from(render_shortcut(s))));
+                lines.extend(PROJECT_SHORTCUTS.iter().map(|s| Line::from(render_shortcut(s))));
                 lines
             }
             Some(Selection::Worktree(_, _)) => {
-                worktree_shortcuts().iter().map(|s| Line::from(render_shortcut(s))).collect()
+                WORKTREE_SHORTCUTS.iter().map(|s| Line::from(render_shortcut(s))).collect()
             }
-            _ => global_shortcuts().iter().map(|s| Line::from(render_shortcut(s))).collect(),
+            _ => GLOBAL_SHORTCUTS.iter().map(|s| Line::from(render_shortcut(s))).collect(),
         },
         InputMode::AddingProjectName => vec![
             named_key_line("Enter", "create"),
