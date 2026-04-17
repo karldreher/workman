@@ -1,4 +1,5 @@
 use crate::app::{App, FuzzyEntry, InputMode, Selection};
+use crate::shortcuts::{global_shortcuts, project_shortcuts, worktree_shortcuts, Shortcut};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
@@ -219,18 +220,29 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
     f.render_widget(output_paragraph, right_chunks[1]);
 }
 
-/// Renders a `(k)ey label` shortcut span group.
-/// `key` is the letter shown in parens; `rest` is the remainder of the label.
-fn kv(key: &'static str, rest: &'static str) -> Vec<Span<'static>> {
+/// Renders a `Shortcut` as `(k)ey label` spans.
+/// If the shortcut key matches the first letter of the label, the key is shown
+/// inline: `(t)erminal`. Otherwise it appears before the label: `(x) remove`.
+fn render_shortcut(s: &Shortcut) -> Vec<Span<'static>> {
     let ks = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
-    vec![
-        Span::raw("("),
-        Span::styled(key, ks),
-        Span::raw(format!("){rest}  ")),
-    ]
+    let first = s.label.chars().next().map(|c| c.to_ascii_lowercase());
+    if first == Some(s.key) {
+        let rest = &s.label[s.key.len_utf8()..];
+        vec![
+            Span::raw("("),
+            Span::styled(s.key.to_string(), ks),
+            Span::raw(format!("){rest}  ")),
+        ]
+    } else {
+        vec![
+            Span::raw("("),
+            Span::styled(s.key.to_string(), ks),
+            Span::raw(format!(") {}  ", s.label)),
+        ]
+    }
 }
 
-/// Renders a named key (like Enter or Esc) followed by a label.
+/// Renders a named / multi-character key (Enter, Esc, Ctrl+C, ↑↓ …) + label.
 fn named_key(key: &'static str, label: &'static str) -> Vec<Span<'static>> {
     let ks = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
     vec![
@@ -246,22 +258,18 @@ fn build_help_lines(app: &App) -> Vec<Line<'static>> {
             // Line 1: context-specific shortcuts
             match app.get_selected_selection() {
                 Some(Selection::Project(_)) => {
-                    let ks = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
                     let mut spans: Vec<Span> = vec![Span::raw(" ")];
                     spans.extend(named_key("Enter", "expand"));
-                    spans.extend(kv("a", "dd repo"));
-                    spans.extend(kv("t", "erminal"));
-                    spans.extend(kv("p", "ush all"));
-                    spans.extend([Span::raw("("), Span::styled("x", ks), Span::raw(") remove  ")]);
+                    for s in project_shortcuts() {
+                        spans.extend(render_shortcut(&s));
+                    }
                     lines.push(Line::from(spans));
                 }
                 Some(Selection::Worktree(_, _)) => {
-                    let ks = Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD);
                     let mut spans: Vec<Span> = vec![Span::raw(" ")];
-                    spans.extend(kv("t", "erminal"));
-                    spans.extend(kv("p", "ush"));
-                    spans.extend(kv("d", "iff"));
-                    spans.extend([Span::raw("("), Span::styled("x", ks), Span::raw(") remove  ")]);
+                    for s in worktree_shortcuts() {
+                        spans.extend(render_shortcut(&s));
+                    }
                     lines.push(Line::from(spans));
                 }
                 _ => {
@@ -271,10 +279,9 @@ fn build_help_lines(app: &App) -> Vec<Line<'static>> {
             }
             // Line 2: always-visible global shortcuts
             let mut global: Vec<Span> = vec![Span::raw(" ")];
-            global.extend(kv("n", "ew project"));
-            global.extend(kv("o", "ptions"));
-            global.extend(kv("h", "elp"));
-            global.extend(kv("q", "uit"));
+            for s in global_shortcuts() {
+                global.extend(render_shortcut(&s));
+            }
             lines.push(Line::from(global));
         }
         InputMode::AddingProjectName => {

@@ -2,6 +2,7 @@ mod app;
 mod event_handler;
 mod models;
 mod session;
+mod shortcuts;
 mod terminal_handler;
 mod ui;
 
