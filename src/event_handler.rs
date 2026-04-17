@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::{fs, path::PathBuf};
 
 use crate::app::{App, InputMode, Selection};
-use crate::models::{Config, Project, ProjectWorktree};
+use crate::models::{Config, Project, ProjectWorktree, Repo};
 use crate::session::Session;
 
 pub enum AppState {
@@ -54,33 +54,18 @@ pub async fn handle_key_event(
                 app.full_error_detail = None;
             }
 
-            // Add repo to global pool
-            KeyCode::Char('a') => {
-                app.input_mode = InputMode::AddingRepoPath;
-                app.input.clear();
-                app.error_message = None;
-                app.full_error_detail = None;
-            }
-
-            // Add worktrees to existing project (or expand if no repos to add)
-            KeyCode::Char('w') => {
+            // Add a repo to the selected project (opens fuzzy path picker)
+            KeyCode::Char('w') | KeyCode::Char('a') => {
                 if let Some(Selection::Project(p_idx)) = app.get_selected_selection() {
-                    let available: Vec<_> = app.config.repos.iter().filter(|repo| {
-                        !app.config.projects[p_idx].worktrees.iter().any(|wt| wt.repo_name == repo.name)
-                    }).collect();
-
-                    if available.is_empty() {
-                        app.error_message = Some("All repos are already in this project.".to_string());
-                    } else {
-                        app.adding_to_project = Some(p_idx);
-                        app.pending_project_name = app.config.projects[p_idx].name.clone();
-                        app.pending_project_branch = app.config.projects[p_idx].branch.clone();
-                        app.repo_selection = vec![false; app.config.repos.len()];
-                        app.repo_cursor = 0;
-                        app.input_mode = InputMode::SelectingRepos;
-                        app.error_message = None;
-                        app.full_error_detail = None;
-                    }
+                    app.adding_to_project = Some(p_idx);
+                    app.fuzzy_cursor = None;
+                    app.input.clear();
+                    app.update_fuzzy_results();
+                    app.input_mode = InputMode::AddingRepo;
+                    app.error_message = None;
+                    app.full_error_detail = None;
+                } else {
+                    app.error_message = Some("Select a project first.".to_string());
                 }
             }
 
@@ -283,63 +268,6 @@ pub async fn handle_key_event(
             app.input_mode = InputMode::Normal;
         }
 
-        // ── Adding repo path ──────────────────────────────────────────────
-        InputMode::AddingRepoPath => match key.code {
-            KeyCode::Enter => {
-                let path_str = app.input.trim().to_string();
-                let path = PathBuf::from(&path_str);
-                match Config::validate_repo_path(&path) {
-                    Ok(_) => {
-                        let abs_path = fs::canonicalize(&path).unwrap();
-                        let name = abs_path.file_name().unwrap().to_string_lossy().to_string();
-                        // Don't add duplicates
-                        if app.config.repos.iter().any(|r| r.path == abs_path) {
-                            app.error_message = Some(format!("Repo '{}' already added.", name));
-                        } else {
-                            app.config.repos.push(crate::models::Repo { name, path: abs_path });
-                            app.save_config();
-                            app.input_mode = InputMode::Normal;
-                            app.error_message = None;
-                            app.full_error_detail = None;
-                        }
-                    }
-                    Err(e) => {
-                        app.error_message = Some(e.to_string());
-                        app.full_error_detail = Some(e.to_string());
-                    }
-                }
-            }
-            KeyCode::Tab => {
-                if app.path_completions.is_empty() {
-                    app.update_completions();
-                }
-                if !app.path_completions.is_empty() {
-                    let idx = match app.completion_idx {
-                        Some(i) => (i + 1) % app.path_completions.len(),
-                        None => 0,
-                    };
-                    app.completion_idx = Some(idx);
-                    app.input = app.path_completions[idx].clone();
-                }
-            }
-            KeyCode::Char(c) => {
-                app.input.push(c);
-                app.error_message = None;
-                app.path_completions.clear();
-            }
-            KeyCode::Backspace => {
-                app.input.pop();
-                app.path_completions.clear();
-            }
-            KeyCode::Esc => {
-                app.input_mode = InputMode::Normal;
-                app.input.clear();
-                app.error_message = None;
-                app.full_error_detail = None;
-            }
-            _ => {}
-        },
-
         // ── Project name (step 1) ─────────────────────────────────────────
         InputMode::AddingProjectName => match key.code {
             KeyCode::Enter => {
@@ -374,36 +302,31 @@ pub async fn handle_key_event(
                 } else {
                     app.pending_project_branch = branch;
                     app.input.clear();
-                    if app.config.repos.is_empty() {
-                        // No repos yet — create empty project immediately
-                        let project_name = app.pending_project_name.clone();
-                        let project_branch = app.pending_project_branch.clone();
-                        let folder = Project::make_folder_path(&project_name);
-                        let project = Project {
-                            name: project_name.clone(),
-                            branch: project_branch,
-                            worktrees: Vec::new(),
-                            folder: folder.clone(),
-                        };
-                        let _ = project.create_folder();
-                        app.config.projects.push(project);
-                        let new_p_idx = app.config.projects.len() - 1;
-                        app.expanded_projects.insert(new_p_idx);
-                        app.save_config();
-                        let items = app.get_tree_items();
-                        if let Some(idx) = items.iter().position(|(_, s, _)| *s == Selection::Project(new_p_idx)) {
-                            app.tree_state.select(Some(idx));
-                        }
-                        app.input_mode = InputMode::Normal;
-                        app.error_message = Some("Project created. Add repos with 'a', then add worktrees with 'w'.".to_string());
-                    } else {
-                        // Move to repo selection
-                        app.adding_to_project = None;
-                        app.repo_selection = vec![false; app.config.repos.len()];
-                        app.repo_cursor = 0;
-                        app.input_mode = InputMode::SelectingRepos;
-                        app.error_message = None;
+                    // Create the project immediately, then drop into AddingRepo
+                    let project_name = app.pending_project_name.clone();
+                    let project_branch = app.pending_project_branch.clone();
+                    let folder = Project::make_folder_path(&project_name);
+                    let project = Project {
+                        name: project_name.clone(),
+                        branch: project_branch,
+                        worktrees: Vec::new(),
+                        folder: folder.clone(),
+                    };
+                    let _ = project.create_folder();
+                    app.config.projects.push(project);
+                    let new_p_idx = app.config.projects.len() - 1;
+                    app.expanded_projects.insert(new_p_idx);
+                    app.save_config();
+                    let items = app.get_tree_items();
+                    if let Some(idx) = items.iter().position(|(_, s, _)| *s == Selection::Project(new_p_idx)) {
+                        app.tree_state.select(Some(idx));
                     }
+                    // Immediately enter repo picker for the new project
+                    app.adding_to_project = Some(new_p_idx);
+                    app.fuzzy_cursor = None;
+                    app.update_fuzzy_results();
+                    app.input_mode = InputMode::AddingRepo;
+                    app.error_message = None;
                 }
             }
             KeyCode::Char(c) => { app.input.push(c); app.error_message = None; }
@@ -416,35 +339,44 @@ pub async fn handle_key_event(
             _ => {}
         },
 
-        // ── Repo multi-select (step 3 or add-to-project) ──────────────────
-        InputMode::SelectingRepos => match key.code {
+        // ── Fuzzy repo picker ─────────────────────────────────────────────
+        InputMode::AddingRepo => match key.code {
+            KeyCode::Char(c) => {
+                app.input.push(c);
+                app.fuzzy_cursor = None; // reset selection on new input
+                app.error_message = None;
+                app.update_fuzzy_results();
+            }
+            KeyCode::Backspace => {
+                app.input.pop();
+                app.fuzzy_cursor = None;
+                app.error_message = None;
+                app.update_fuzzy_results();
+            }
             KeyCode::Up => {
-                if app.repo_cursor > 0 {
-                    app.repo_cursor -= 1;
+                if !app.fuzzy_results.is_empty() {
+                    app.fuzzy_cursor = Some(match app.fuzzy_cursor {
+                        None | Some(0) => app.fuzzy_results.len() - 1,
+                        Some(i) => i - 1,
+                    });
                 }
             }
             KeyCode::Down => {
-                let available = app.available_repos();
-                if app.repo_cursor + 1 < available.len() {
-                    app.repo_cursor += 1;
-                }
-            }
-            KeyCode::Char(' ') => {
-                let available = app.available_repos();
-                if let Some((repo_idx, _)) = available.get(app.repo_cursor) {
-                    let repo_idx = *repo_idx;
-                    if app.repo_selection.len() <= repo_idx {
-                        app.repo_selection.resize(repo_idx + 1, false);
-                    }
-                    app.repo_selection[repo_idx] = !app.repo_selection[repo_idx];
+                if !app.fuzzy_results.is_empty() {
+                    app.fuzzy_cursor = Some(match app.fuzzy_cursor {
+                        None => 0,
+                        Some(i) => (i + 1) % app.fuzzy_results.len(),
+                    });
                 }
             }
             KeyCode::Enter => {
-                handle_confirm_repo_selection(app);
+                handle_add_repo(app).await?;
             }
             KeyCode::Esc => {
                 app.input_mode = InputMode::Normal;
-                app.repo_selection.clear();
+                app.input.clear();
+                app.fuzzy_results.clear();
+                app.fuzzy_cursor = None;
                 app.adding_to_project = None;
                 app.error_message = None;
             }
@@ -592,127 +524,90 @@ fn handle_remove_worktree(app: &mut App, p_idx: usize, w_idx: usize) {
     }
 }
 
-/// Confirms repo selection and creates worktrees (new project or add to existing).
-fn handle_confirm_repo_selection(app: &mut App) {
-    let selected_repo_indices: Vec<usize> = app.available_repos()
-        .iter()
-        .filter(|(repo_idx, _)| app.repo_selection.get(*repo_idx).copied().unwrap_or(false))
-        .map(|(repo_idx, _)| *repo_idx)
-        .collect();
+/// Confirms the current repo path (or highlighted suggestion) and creates a worktree.
+/// Stays in AddingRepo mode so the user can add more repos without re-entering the flow.
+async fn handle_add_repo(app: &mut App) -> Result<()> {
+    // Resolve the path: use highlighted suggestion if one is active, else typed input
+    let raw_path = match app.fuzzy_cursor {
+        Some(i) if i < app.fuzzy_results.len() => {
+            app.fuzzy_results[i].path.to_string_lossy().to_string()
+        }
+        _ => app.input.trim().to_string(),
+    };
 
-    if selected_repo_indices.is_empty() {
-        if app.adding_to_project.is_some() {
-            app.error_message = Some("No repos selected. Use Space to select.".to_string());
-            return;
-        }
-        // Creating a new project with no repos selected — create empty project
-        let project_name = app.pending_project_name.clone();
-        let project_branch = app.pending_project_branch.clone();
-        let folder = Project::make_folder_path(&project_name);
-        let project = Project {
-            name: project_name.clone(),
-            branch: project_branch,
-            worktrees: Vec::new(),
-            folder: folder.clone(),
-        };
-        let _ = project.create_folder();
-        app.config.projects.push(project);
-        let new_p_idx = app.config.projects.len() - 1;
-        app.expanded_projects.insert(new_p_idx);
-        app.save_config();
-        let items = app.get_tree_items();
-        if let Some(idx) = items.iter().position(|(_, s, _)| *s == Selection::Project(new_p_idx)) {
-            app.tree_state.select(Some(idx));
-        }
+    if raw_path.is_empty() {
+        // Empty Enter with no selection = done, exit the mode
         app.input_mode = InputMode::Normal;
-        app.repo_selection.clear();
+        app.input.clear();
+        app.fuzzy_results.clear();
+        app.fuzzy_cursor = None;
         app.adding_to_project = None;
-        app.error_message = Some("Project created with no repos. Use 'w' to add worktrees.".to_string());
-        return;
+        return Ok(());
     }
 
-    let branch = app.pending_project_branch.clone();
-    let project_name = app.pending_project_name.clone();
+    let path = PathBuf::from(&raw_path);
+    let p_idx = match app.adding_to_project {
+        Some(i) => i,
+        None => return Ok(()),
+    };
 
-    let mut created: Vec<ProjectWorktree> = Vec::new();
-    let mut errors: Vec<String> = Vec::new();
-
-    for &repo_idx in &selected_repo_indices {
-        let repo = app.config.repos[repo_idx].clone();
-        match repo.add_worktree(&branch) {
-            Ok((out, wt_path)) if out.status.success() => {
-                created.push(ProjectWorktree {
-                    repo_name: repo.name.clone(),
-                    path: wt_path,
-                });
-            }
-            Ok((out, _)) => {
-                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                errors.push(format!("[{}] {}", repo.name, stderr.trim()));
-            }
-            Err(e) => {
-                errors.push(format!("[{}] {}", repo.name, e));
-            }
+    match Config::validate_repo_path(&path) {
+        Err(e) => {
+            app.error_message = Some(format!("{}", e));
         }
-    }
-
-    if let Some(p_idx) = app.adding_to_project {
-        // Adding to existing project
-        for wt in &created {
-            let _ = app.config.projects[p_idx].add_symlink(wt);
-            app.config.projects[p_idx].worktrees.push(wt.clone());
-        }
-        app.save_config();
-        app.refresh_worktree_status();
-
-        // Navigate to the project
-        let items = app.get_tree_items();
-        if let Some(idx) = items.iter().position(|(_, s, _)| *s == Selection::Project(p_idx)) {
-            app.tree_state.select(Some(idx));
-        }
-    } else {
-        // Creating new project
-        if !created.is_empty() {
-            let folder = Project::make_folder_path(&project_name);
-            let worktrees_empty = created.is_empty();
-            let project = Project {
-                name: project_name.clone(),
-                branch: branch.clone(),
-                worktrees: created,
-                folder: folder.clone(),
+        Ok(_) => {
+            let abs_path = match fs::canonicalize(&path) {
+                Ok(p) => p,
+                Err(e) => { app.error_message = Some(format!("Cannot resolve path: {}", e)); return Ok(()); }
             };
-            let _ = project.create_folder();
-            app.config.projects.push(project);
-            let new_p_idx = app.config.projects.len() - 1;
-            app.expanded_projects.insert(new_p_idx);
-            app.save_config();
-            app.refresh_worktree_status();
+            let name = abs_path.file_name().unwrap_or_default().to_string_lossy().to_string();
 
-            let items = app.get_tree_items();
-            if let Some(idx) = items.iter().position(|(_, s, _)| *s == Selection::Project(new_p_idx)) {
-                app.tree_state.select(Some(idx));
+            // Check if already in this project
+            if app.config.projects[p_idx].worktrees.iter().any(|wt| wt.repo_name == name) {
+                app.error_message = Some(format!("'{}' is already in this project.", name));
+                return Ok(());
             }
-            let _ = worktrees_empty; // used below
+
+            // Upsert into the repo cache (background — user never sees this)
+            let repo = if let Some(existing) = app.config.repos.iter().find(|r| r.path == abs_path).cloned() {
+                existing
+            } else {
+                let r = Repo { name: name.clone(), path: abs_path.clone() };
+                app.config.repos.push(r.clone());
+                r
+            };
+
+            let branch = app.config.projects[p_idx].branch.clone();
+            match repo.add_worktree(&branch) {
+                Ok((out, wt_path)) if out.status.success() => {
+                    let wt = ProjectWorktree { repo_name: repo.name.clone(), path: wt_path };
+                    let _ = app.config.projects[p_idx].add_symlink(&wt);
+                    app.config.projects[p_idx].worktrees.push(wt);
+                    app.save_config();
+                    app.refresh_worktree_status();
+                    // Clear input, reset cursor, recompute suggestions for next repo
+                    app.input.clear();
+                    app.fuzzy_cursor = None;
+                    app.update_fuzzy_results();
+                    app.error_message = None;
+                    app.full_error_detail = None;
+                }
+                Ok((out, _)) => {
+                    // Save cache even on worktree failure
+                    app.save_config();
+                    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                    app.error_message = Some(format!("Worktree error: {}", stderr.trim()));
+                    app.full_error_detail = Some(stderr);
+                }
+                Err(e) => {
+                    app.save_config();
+                    app.error_message = Some(format!("Error: {}", e));
+                    app.full_error_detail = Some(e.to_string());
+                }
+            }
         }
     }
-
-    if errors.is_empty() {
-        app.command_output.clear();
-        app.error_message = None;
-    } else {
-        app.command_output = errors.clone();
-        let new_project_failed = app.adding_to_project.is_none()
-            && app.config.projects.last().map(|p| p.worktrees.is_empty()).unwrap_or(true);
-        if new_project_failed {
-            app.error_message = Some("All worktree creations failed.".to_string());
-        } else {
-            app.error_message = Some(format!("{} worktree(s) failed (see output).", errors.len()));
-        }
-    }
-
-    app.input_mode = InputMode::Normal;
-    app.repo_selection.clear();
-    app.adding_to_project = None;
+    Ok(())
 }
 
 /// Push a single worktree.

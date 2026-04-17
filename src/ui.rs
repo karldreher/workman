@@ -1,4 +1,4 @@
-use crate::app::{App, InputMode, Selection};
+use crate::app::{App, FuzzyEntry, InputMode, Selection};
 use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
@@ -64,7 +64,7 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
     // Output / Terminal pane
     let pane_title = match app.input_mode {
         InputMode::Terminal => " Terminal (Attached) ",
-        InputMode::SelectingRepos => " Select Repos ",
+        InputMode::AddingRepo => " Add Repo ",
         InputMode::Options => " Options ",
         InputMode::Help => " Help ",
         _ => " Output ",
@@ -78,9 +78,9 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
             Style::default()
         });
 
-    // SelectingRepos: show checklist in right panel
-    if app.input_mode == InputMode::SelectingRepos {
-        render_repo_selector(f, app, output_block, right_chunks[1]);
+    // AddingRepo: fuzzy path picker
+    if app.input_mode == InputMode::AddingRepo {
+        render_add_repo(f, app, output_block, right_chunks[1]);
         return;
     }
 
@@ -166,9 +166,6 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
     }
 
     match app.input_mode {
-        InputMode::AddingRepoPath => {
-            output_lines.push(Line::from(format!("  Repo path> {}", app.input)));
-        }
         InputMode::AddingProjectName => {
             output_lines.push(Line::from(format!("  Project name> {}", app.input)));
         }
@@ -184,40 +181,18 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
     // Contextual hints when output pane is otherwise empty
     if output_lines.is_empty() && app.input_mode == InputMode::Normal {
         let hint_style = Style::default().fg(Color::DarkGray);
-        let repo_count = app.config.repos.len();
         match app.get_selected_selection() {
             None if app.config.projects.is_empty() => {
                 output_lines.push(Line::from(""));
                 output_lines.push(Line::from(Span::styled("  Welcome to workman!", Style::default().fg(Color::Cyan))));
                 output_lines.push(Line::from(""));
-                output_lines.push(Line::from(Span::styled("  Get started:", hint_style)));
-                output_lines.push(Line::from(Span::styled("    n  Create a new project", hint_style)));
-                output_lines.push(Line::from(Span::styled("    a  Add a repo to the global pool", hint_style)));
-                output_lines.push(Line::from(Span::styled("    h  Show full keybinding reference", hint_style)));
-                if repo_count > 0 {
-                    output_lines.push(Line::from(""));
-                    output_lines.push(Line::from(Span::styled(
-                        format!("  {} repo(s) in pool — press 'n' to create a project", repo_count),
-                        hint_style,
-                    )));
-                }
+                output_lines.push(Line::from(Span::styled("  n  Create a project", hint_style)));
+                output_lines.push(Line::from(Span::styled("  h  Show keybinding reference", hint_style)));
             }
             Some(Selection::Project(p_idx)) if app.config.projects[p_idx].worktrees.is_empty() => {
                 output_lines.push(Line::from(""));
-                output_lines.push(Line::from(Span::styled("  This project has no worktrees yet.", hint_style)));
-                if repo_count == 0 {
-                    output_lines.push(Line::from(Span::styled("    a  Add a repo to the pool first", hint_style)));
-                }
-                output_lines.push(Line::from(Span::styled("    w  Add repos → creates worktrees on project branch", hint_style)));
-            }
-            Some(Selection::Project(_)) => {
-                if repo_count > 0 {
-                    output_lines.push(Line::from(""));
-                    output_lines.push(Line::from(Span::styled(
-                        format!("  {} repo(s) in pool", repo_count),
-                        hint_style,
-                    )));
-                }
+                output_lines.push(Line::from(Span::styled("  No repos in this project yet.", hint_style)));
+                output_lines.push(Line::from(Span::styled("  w  Add a repo (creates worktree on project branch)", hint_style)));
             }
             _ => {}
         }
@@ -235,28 +210,25 @@ fn build_help_lines(app: &App) -> Vec<Line<'static>> {
         InputMode::Normal => {
             match app.get_selected_selection() {
                 Some(Selection::Project(_)) => {
-                    lines.push(Line::from(" [Enter] expand/collapse  [w] add worktrees  [r] delete project  [p] push all  [c] terminal"));
+                    lines.push(Line::from(" [Enter] expand/collapse  [w] add repo  [r] delete project  [p] push all  [c] terminal"));
                 }
                 Some(Selection::Worktree(_, _)) => {
                     lines.push(Line::from(" [c] terminal  [p] push  [d] diff  [r] remove worktree"));
                 }
                 _ => {
-                    lines.push(Line::from(" [n] new project  [a] add repo  [h] help"));
+                    lines.push(Line::from(" [n] new project  [h] help"));
                 }
             }
-            lines.push(Line::from(" [n] new project  [a] add repo  [o] options  [h] help  [q] quit"));
-        }
-        InputMode::AddingRepoPath => {
-            lines.push(Line::from(" Enter repo path (Tab: autocomplete, Enter: confirm, Esc: cancel)"));
+            lines.push(Line::from(" [n] new project  [o] options  [h] help  [q] quit"));
         }
         InputMode::AddingProjectName => {
             lines.push(Line::from(" Enter project name (Enter: next, Esc: cancel)"));
         }
         InputMode::AddingProjectBranch => {
-            lines.push(Line::from(" Enter branch name for all repos in this project (Enter: next, Esc: cancel)"));
+            lines.push(Line::from(" Enter branch name (Enter: create project, Esc: cancel)"));
         }
-        InputMode::SelectingRepos => {
-            lines.push(Line::from(" ↑/↓ navigate  Space: toggle  Enter: confirm  Esc: cancel"));
+        InputMode::AddingRepo => {
+            lines.push(Line::from(" Type path or ↑/↓ to pick suggestion  Enter: add  Enter (empty): done  Esc: cancel"));
         }
         InputMode::ViewingDiff => {
             lines.push(Line::from(" Viewing diff (Space: scroll, Esc: exit)"));
@@ -283,46 +255,82 @@ fn build_help_lines(app: &App) -> Vec<Line<'static>> {
     lines
 }
 
-fn render_repo_selector(
+fn render_add_repo(
     f: &mut ratatui::Frame,
     app: &App,
     block: Block,
     area: ratatui::layout::Rect,
 ) {
-    let available = app.available_repos();
     let mut lines: Vec<Line> = Vec::new();
+    let dim = Style::default().fg(Color::DarkGray);
 
-    let context = if app.adding_to_project.is_some() {
-        format!("Add repos to project '{}' (branch: {})", app.pending_project_name, app.pending_project_branch)
-    } else {
-        format!("Select repos for project '{}' (branch: {})", app.pending_project_name, app.pending_project_branch)
-    };
-    lines.push(Line::from(Span::styled(context, Style::default().fg(Color::Cyan))));
+    // Context header
+    if let Some(p_idx) = app.adding_to_project {
+        if p_idx < app.config.projects.len() {
+            let p = &app.config.projects[p_idx];
+            lines.push(Line::from(Span::styled(
+                format!(" Adding to \"{}\"  branch: {}", p.name, p.branch),
+                Style::default().fg(Color::Cyan),
+            )));
+        }
+    }
     lines.push(Line::from(""));
 
-    if available.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  No repos available. Add repos with 'a' first.",
-            Style::default().fg(Color::DarkGray),
-        )));
-    } else {
-        for (display_idx, (repo_idx, repo)) in available.iter().enumerate() {
-            let is_selected = app.repo_selection.get(*repo_idx).copied().unwrap_or(false);
-            let is_cursor = display_idx == app.repo_cursor;
+    // Error (if any)
+    if let Some(err) = &app.error_message {
+        lines.push(Line::from(Span::styled(format!("  {}", err), Style::default().fg(Color::Yellow))));
+        lines.push(Line::from(""));
+    }
 
-            let checkbox = if is_selected { "[x]" } else { "[ ]" };
-            let cursor_sym = if is_cursor { "> " } else { "  " };
-            let style = if is_cursor {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-            } else if is_selected {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default()
-            };
-            lines.push(Line::from(Span::styled(
-                format!("{}{}  {}  ({})", cursor_sym, checkbox, repo.name, repo.path.display()),
-                style,
-            )));
+    // Input line
+    lines.push(Line::from(vec![
+        Span::styled("  Path> ", Style::default().fg(Color::Yellow)),
+        Span::raw(app.input.as_str()),
+        Span::styled("_", Style::default().fg(Color::DarkGray)),
+    ]));
+    lines.push(Line::from(""));
+
+    // Suggestions
+    if app.fuzzy_results.is_empty() {
+        lines.push(Line::from(Span::styled("  Type a path to a git repository.", dim)));
+    } else {
+        // Separate known (promoted) from filesystem entries
+        let known: Vec<(usize, &FuzzyEntry)> = app.fuzzy_results.iter().enumerate().filter(|(_, e)| e.known).collect();
+        let new_dirs: Vec<(usize, &FuzzyEntry)> = app.fuzzy_results.iter().enumerate().filter(|(_, e)| !e.known).collect();
+
+        if !known.is_empty() {
+            lines.push(Line::from(Span::styled("  Previously used:", dim)));
+            for (i, entry) in &known {
+                let selected = app.fuzzy_cursor == Some(*i);
+                let cursor = if selected { ">" } else { " " };
+                let style = if selected {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Green)
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("  {}  {}", cursor, entry.path.display()),
+                    style,
+                )));
+            }
+        }
+
+        if !new_dirs.is_empty() {
+            if !known.is_empty() { lines.push(Line::from("")); }
+            lines.push(Line::from(Span::styled("  Filesystem:", dim)));
+            for (i, entry) in &new_dirs {
+                let selected = app.fuzzy_cursor == Some(*i);
+                let cursor = if selected { ">" } else { " " };
+                let style = if selected {
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+                lines.push(Line::from(Span::styled(
+                    format!("  {}  {}/", cursor, entry.path.display()),
+                    style,
+                )));
+            }
         }
     }
 
@@ -379,8 +387,7 @@ fn render_help(
         Line::from(Span::styled(" Global", h)),
         row!("q / Ctrl+C", "Quit"),
         row!("↑ / ↓", "Navigate list"),
-        row!("n", "New project (name → branch → select repos)"),
-        row!("a", "Add repo to global pool"),
+        row!("n", "New project (name → branch → add repos)"),
         row!("o", "Options (toggle tmux, etc.)"),
         row!("h", "This help screen"),
         row!("Ctrl+L", "Export error log to /tmp/workman.log"),

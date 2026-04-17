@@ -1,4 +1,4 @@
-use crate::models::{Config, Repo};
+use crate::models::Config;
 use crate::session::Session;
 use ratatui::widgets::ListState;
 use ratatui::style::{Color, Modifier, Style};
@@ -15,15 +15,20 @@ pub enum Selection {
 #[derive(PartialEq)]
 pub enum InputMode {
     Normal,
-    AddingRepoPath,      // adding a repo to the global pool
     AddingProjectName,   // step 1 of project creation: name
     AddingProjectBranch, // step 2 of project creation: branch
-    SelectingRepos,      // step 3: multi-select repos (also used when adding to existing project)
+    AddingRepo,          // path input + fuzzy suggestions for adding a repo to a project
     ViewingDiff,
     EditingCommitMessage,
     Terminal,
     Options,
     Help,
+}
+
+/// A single entry in the fuzzy suggestion list shown in AddingRepo mode.
+pub struct FuzzyEntry {
+    pub path: PathBuf,
+    pub known: bool, // true = previously used in another project
 }
 
 pub struct App {
@@ -35,8 +40,6 @@ pub struct App {
     pub full_error_detail: Option<String>,
     pub command_output: Vec<String>,
     pub diff_scroll_offset: usize,
-    pub path_completions: Vec<String>,
-    pub completion_idx: Option<usize>,
     pub sessions: HashMap<Selection, Session>,
     pub terminal_warning: Option<String>,
     pub worktree_status: HashMap<(usize, usize), String>,
@@ -45,10 +48,10 @@ pub struct App {
     // Project creation state
     pub pending_project_name: String,
     pub pending_project_branch: String,
-    // Repo multi-select state (used in SelectingRepos mode)
-    pub repo_selection: Vec<bool>, // parallel to config.repos or filtered_repos
-    pub repo_cursor: usize,
-    // When Some(p_idx): adding worktrees to existing project; when None: creating new project
+    // Fuzzy repo picker state (AddingRepo mode)
+    pub fuzzy_results: Vec<FuzzyEntry>,
+    pub fuzzy_cursor: Option<usize>, // None = cursor at text input; Some(i) = suggestion highlighted
+    // Which project we are currently adding a repo to
     pub adding_to_project: Option<usize>,
     // Options overlay cursor
     pub options_cursor: usize,
@@ -58,7 +61,7 @@ impl App {
     pub fn new() -> App {
         let (config, migration_notice) = Config::load();
         let expanded_projects: HashSet<usize> = (0..config.projects.len()).collect();
-        let has_items = !config.repos.is_empty() || !config.projects.is_empty();
+        let has_items = !config.projects.is_empty();
         let mut app = App {
             config,
             tree_state: ListState::default(),
@@ -68,16 +71,14 @@ impl App {
             full_error_detail: None,
             command_output: Vec::new(),
             diff_scroll_offset: 0,
-            path_completions: Vec::new(),
-            completion_idx: None,
             sessions: HashMap::new(),
             terminal_warning: None,
             worktree_status: HashMap::new(),
             expanded_projects,
             pending_project_name: String::new(),
             pending_project_branch: String::new(),
-            repo_selection: Vec::new(),
-            repo_cursor: 0,
+            fuzzy_results: Vec::new(),
+            fuzzy_cursor: None,
             adding_to_project: None,
             options_cursor: 0,
         };
@@ -101,17 +102,78 @@ impl App {
         let _ = self.config.save();
     }
 
-    /// Returns the repos available for selection in SelectingRepos mode.
-    /// When adding to an existing project, filters out repos already in that project.
-    pub fn available_repos(&self) -> Vec<(usize, &Repo)> {
-        self.config.repos.iter().enumerate().filter(|(_, repo)| {
+    /// Recomputes fuzzy suggestions from previously used repos + filesystem directories.
+    /// Call whenever `self.input` changes while in AddingRepo mode.
+    pub fn update_fuzzy_results(&mut self) {
+        let query = self.input.trim().to_lowercase();
+        let mut results: Vec<FuzzyEntry> = Vec::new();
+        let mut known_paths: HashSet<PathBuf> = HashSet::new();
+
+        // 1. Previously used repos promoted to the top.
+        //    When the input looks like a filesystem path (contains '/'), show all known repos
+        //    so they stay visible while the user browses dirs. Otherwise filter by substring.
+        let is_path_input = self.input.contains('/');
+        for repo in &self.config.repos {
+            // Skip repos already wired into the target project
             if let Some(p_idx) = self.adding_to_project {
-                let project = &self.config.projects[p_idx];
-                !project.worktrees.iter().any(|wt| wt.repo_name == repo.name)
-            } else {
-                true
+                if p_idx < self.config.projects.len()
+                    && self.config.projects[p_idx].worktrees.iter().any(|wt| wt.repo_name == repo.name)
+                {
+                    continue;
+                }
             }
-        }).collect()
+            let matches = if is_path_input || query.is_empty() {
+                true // always show when navigating filesystem or nothing typed
+            } else {
+                let path_str = repo.path.to_string_lossy().to_lowercase();
+                let name_str = repo.name.to_lowercase();
+                path_str.contains(&query) || name_str.contains(&query)
+            };
+            if matches {
+                known_paths.insert(repo.path.clone());
+                results.push(FuzzyEntry { path: repo.path.clone(), known: true });
+            }
+        }
+
+        // 2. Filesystem directories that match the typed prefix
+        let input_path = PathBuf::from(if self.input.is_empty() { "." } else { &self.input });
+        let (dir, prefix): (PathBuf, String) = if self.input.is_empty() || self.input.ends_with('/') {
+            (input_path, String::new())
+        } else {
+            let p = input_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
+            let f = input_path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+            (p, f)
+        };
+
+        if let Ok(entries) = fs::read_dir(&dir) {
+            let mut fs_dirs: Vec<PathBuf> = Vec::new();
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if !p.is_dir() { continue; }
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+                if name.starts_with('.') { continue; } // skip hidden
+                if prefix.is_empty() || name.starts_with(&prefix) {
+                    let canonical = fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
+                    if !known_paths.contains(&canonical) {
+                        fs_dirs.push(p);
+                    }
+                }
+            }
+            fs_dirs.sort();
+            for p in fs_dirs {
+                results.push(FuzzyEntry { path: p, known: false });
+            }
+        }
+
+        // Cap cursor to valid range
+        if let Some(c) = self.fuzzy_cursor {
+            if results.is_empty() {
+                self.fuzzy_cursor = None;
+            } else if c >= results.len() {
+                self.fuzzy_cursor = Some(results.len() - 1);
+            }
+        }
+        self.fuzzy_results = results;
     }
 
     /// Builds the flat list of items for the left-panel tree.
@@ -159,41 +221,6 @@ impl App {
         self.tree_state.selected().and_then(|idx| items.get(idx).map(|item| item.1))
     }
 
-    pub fn update_completions(&mut self) {
-        let input_path = if self.input.is_empty() {
-            PathBuf::from(".")
-        } else {
-            PathBuf::from(&self.input)
-        };
-
-        let (dir, prefix) = if self.input.ends_with('/') || self.input.is_empty() {
-            (input_path, "")
-        } else {
-            let p = input_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
-            let f = input_path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            (p, f)
-        };
-
-        let mut completions = Vec::new();
-        if let Ok(entries) = fs::read_dir(&dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name_str = name.to_string_lossy();
-                if name_str.starts_with(prefix) {
-                    let p = entry.path();
-                    let mut s = p.to_string_lossy().to_string();
-                    if p.is_dir() && !s.ends_with('/') {
-                        s.push('/');
-                    }
-                    completions.push(s);
-                }
-            }
-        }
-        completions.sort();
-        self.path_completions = completions;
-        self.completion_idx = None;
-    }
-
     pub fn next(&mut self) {
         let items = self.get_tree_items();
         if items.is_empty() {
@@ -235,7 +262,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{Project, ProjectWorktree};
+    use crate::models::{Project, ProjectWorktree, Repo};
     use std::path::PathBuf;
 
     fn make_test_app() -> App {
@@ -248,16 +275,14 @@ mod tests {
             full_error_detail: None,
             command_output: Vec::new(),
             diff_scroll_offset: 0,
-            path_completions: Vec::new(),
-            completion_idx: None,
             sessions: HashMap::new(),
             terminal_warning: None,
             worktree_status: HashMap::new(),
             expanded_projects: HashSet::new(),
             pending_project_name: String::new(),
             pending_project_branch: String::new(),
-            repo_selection: Vec::new(),
-            repo_cursor: 0,
+            fuzzy_results: Vec::new(),
+            fuzzy_cursor: None,
             adding_to_project: None,
             options_cursor: 0,
         }
@@ -307,10 +332,8 @@ mod tests {
     fn test_get_tree_items_with_repos_and_projects() {
         let mut app = make_test_app();
 
-        app.config.repos.push(Repo {
-            name: "frontend".to_string(),
-            path: PathBuf::from("/frontend"),
-        });
+        // Repos are in the background cache but not rendered in the tree
+        app.config.repos.push(Repo { name: "frontend".to_string(), path: PathBuf::from("/frontend") });
         app.config.projects.push(Project {
             name: "my-feature".to_string(),
             branch: "feat/my-feature".to_string(),
@@ -349,19 +372,48 @@ mod tests {
     }
 
     #[test]
-    fn test_update_completions() {
+    fn test_update_fuzzy_results_filesystem() {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path();
 
-        fs::create_dir(path.join("dir1")).unwrap();
-        std::fs::File::create(path.join("file1.txt")).unwrap();
+        fs::create_dir(path.join("myrepo")).unwrap();
+        fs::create_dir(path.join("other")).unwrap();
+        std::fs::File::create(path.join("file.txt")).unwrap(); // files excluded
 
         let mut app = make_test_app();
         app.input = path.to_str().unwrap().to_string() + "/";
-        app.update_completions();
+        app.update_fuzzy_results();
 
-        assert!(app.path_completions.len() >= 2);
-        assert!(app.path_completions.iter().any(|c| c.contains("dir1/")));
-        assert!(app.path_completions.iter().any(|c| c.contains("file1.txt")));
+        // Both dirs should appear; the file should not
+        assert_eq!(app.fuzzy_results.iter().filter(|e| !e.known).count(), 2);
+        assert!(app.fuzzy_results.iter().any(|e| e.path.ends_with("myrepo")));
+        assert!(app.fuzzy_results.iter().any(|e| e.path.ends_with("other")));
+    }
+
+    #[test]
+    fn test_update_fuzzy_results_known_promoted() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path();
+        fs::create_dir(path.join("newrepo")).unwrap();
+
+        let mut app = make_test_app();
+        // Add a known repo
+        app.config.repos.push(Repo {
+            name: "frontend".to_string(),
+            path: PathBuf::from("/repos/frontend"),
+        });
+        app.input = path.to_str().unwrap().to_string() + "/";
+        app.update_fuzzy_results();
+
+        // Known repo should appear first (even if path differs from typed prefix)
+        let known: Vec<_> = app.fuzzy_results.iter().filter(|e| e.known).collect();
+        assert_eq!(known.len(), 1);
+        assert_eq!(known[0].path, PathBuf::from("/repos/frontend"));
+        // known entries precede filesystem entries in results
+        let first_fs = app.fuzzy_results.iter().position(|e| !e.known);
+        let first_known = app.fuzzy_results.iter().position(|e| e.known);
+        if let (Some(fk), Some(ffs)) = (first_known, first_fs) {
+            assert!(fk < ffs, "known entries should precede filesystem entries");
+        }
     }
 }
