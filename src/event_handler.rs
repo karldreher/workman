@@ -3,7 +3,7 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::{fs, path::PathBuf};
 
-use crate::app::{App, InputMode, Selection};
+use crate::app::{branch_from_name, App, InputMode, Selection};
 use crate::models::{Config, Project, ProjectWorktree, Repo};
 use crate::session::Session;
 
@@ -315,6 +315,21 @@ pub async fn handle_key_event(
 
         // ── Fuzzy repo picker ─────────────────────────────────────────────
         InputMode::AddingRepo => match key.code {
+            KeyCode::Tab => {
+                // Complete into the highlighted suggestion (or the first one)
+                let target = app.fuzzy_cursor
+                    .filter(|&i| i < app.fuzzy_results.len())
+                    .or_else(|| if !app.fuzzy_results.is_empty() { Some(0) } else { None });
+                if let Some(i) = target {
+                    let mut path = app.fuzzy_results[i].path.to_string_lossy().to_string();
+                    // Append trailing slash for directories so the user can keep browsing
+                    if !path.ends_with('/') { path.push('/'); }
+                    app.input = path;
+                    app.fuzzy_cursor = None;
+                    app.error_message = None;
+                    app.update_fuzzy_results();
+                }
+            }
             KeyCode::Char(c) => {
                 app.input.push(c);
                 app.fuzzy_cursor = None; // reset selection on new input
@@ -668,15 +683,6 @@ fn handle_push_project(app: &mut App, p_idx: usize, commit_msg: Option<String>) 
         app.error_message = Some("Some pushes failed (see output, Ctrl+L to export)".to_string());
         app.full_error_detail = Some(app.command_output.join("\n"));
     }
-}
-
-/// Derives a git branch name from a human-readable project name.
-/// Lowercases, replaces runs of non-alphanumeric characters with a single hyphen.
-fn branch_from_name(name: &str) -> String {
-    let raw: String = name.trim().to_lowercase().chars()
-        .map(|c| if c.is_alphanumeric() || c == '/' || c == '.' { c } else { '-' })
-        .collect();
-    raw.split('-').filter(|s| !s.is_empty()).collect::<Vec<_>>().join("-")
 }
 
 /// Sanitizes a string for use as a tmux session name.

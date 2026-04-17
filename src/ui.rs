@@ -185,7 +185,7 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
             output_lines.push(Line::from(vec![
                 Span::styled("  Project name> ", Style::default().fg(Color::Yellow)),
                 Span::raw(app.input.as_str()),
-                Span::styled("_", Style::default().fg(Color::DarkGray)),
+                Span::styled("_", dim),
             ]));
         }
         InputMode::EditingCommitMessage => {
@@ -288,6 +288,15 @@ fn render_add_repo(
         }
     }
     lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Type a path to a git repo, or use ↑/↓ to browse suggestions.",
+        dim,
+    )));
+    lines.push(Line::from(Span::styled(
+        "  Tab to complete a path. Enter to add. Empty Enter when done.",
+        dim,
+    )));
+    lines.push(Line::from(""));
 
     // Error (if any)
     if let Some(err) = &app.error_message {
@@ -332,17 +341,22 @@ fn render_add_repo(
             if !known.is_empty() { lines.push(Line::from("")); }
             lines.push(Line::from(Span::styled("  Filesystem:", dim)));
             for (i, entry) in &new_dirs {
+                let is_git = entry.path.join(".git").exists();
                 let selected = app.fuzzy_cursor == Some(*i);
                 let cursor = if selected { ">" } else { " " };
                 let style = if selected {
                     Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
-                } else {
+                } else if is_git {
                     Style::default()
+                } else {
+                    dim
                 };
-                lines.push(Line::from(Span::styled(
-                    format!("  {}  {}/", cursor, entry.path.display()),
-                    style,
-                )));
+                let label = if is_git {
+                    format!("  {}  {}/", cursor, entry.path.display())
+                } else {
+                    format!("  {}  {}/  (no .git)", cursor, entry.path.display())
+                };
+                lines.push(Line::from(Span::styled(label, style)));
             }
         }
     }

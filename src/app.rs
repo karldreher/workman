@@ -25,6 +25,14 @@ pub enum InputMode {
 }
 
 /// A single entry in the fuzzy suggestion list shown in AddingRepo mode.
+/// Derives a git branch name from a human-readable project name.
+pub fn branch_from_name(name: &str) -> String {
+    let raw: String = name.trim().to_lowercase().chars()
+        .map(|c| if c.is_alphanumeric() || c == '/' || c == '.' { c } else { '-' })
+        .collect();
+    raw.split('-').filter(|s| !s.is_empty()).collect::<Vec<_>>().join("-")
+}
+
 pub struct FuzzyEntry {
     pub path: PathBuf,
     pub known: bool, // true = previously used in another project
