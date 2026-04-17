@@ -44,12 +44,11 @@ pub async fn handle_key_event(
         InputMode::Normal => match key.code {
             KeyCode::Char('q') => return Ok(AppState::Quit),
 
-            // New project (3-step wizard)
+            // New project
             KeyCode::Char('n') => {
                 app.input_mode = InputMode::AddingProjectName;
                 app.input.clear();
                 app.pending_project_name.clear();
-                app.pending_project_branch.clear();
                 app.error_message = None;
                 app.full_error_detail = None;
             }
@@ -268,7 +267,7 @@ pub async fn handle_key_event(
             app.input_mode = InputMode::Normal;
         }
 
-        // ── Project name (step 1) ─────────────────────────────────────────
+        // ── Project name ──────────────────────────────────────────────────
         InputMode::AddingProjectName => match key.code {
             KeyCode::Enter => {
                 let name = app.input.trim().to_string();
@@ -277,38 +276,13 @@ pub async fn handle_key_event(
                 } else if app.config.projects.iter().any(|p| p.name == name) {
                     app.error_message = Some(format!("Project '{}' already exists.", name));
                 } else {
-                    app.pending_project_name = name;
-                    app.input.clear();
-                    app.input_mode = InputMode::AddingProjectBranch;
-                    app.error_message = None;
-                }
-            }
-            KeyCode::Char(c) => { app.input.push(c); app.error_message = None; }
-            KeyCode::Backspace => { app.input.pop(); }
-            KeyCode::Esc => {
-                app.input_mode = InputMode::Normal;
-                app.input.clear();
-                app.error_message = None;
-            }
-            _ => {}
-        },
-
-        // ── Branch name (step 2) ──────────────────────────────────────────
-        InputMode::AddingProjectBranch => match key.code {
-            KeyCode::Enter => {
-                let branch = app.input.trim().to_string();
-                if branch.is_empty() {
-                    app.error_message = Some("Branch name cannot be empty.".to_string());
-                } else {
-                    app.pending_project_branch = branch;
+                    let branch = branch_from_name(&name);
                     app.input.clear();
                     // Create the project immediately, then drop into AddingRepo
-                    let project_name = app.pending_project_name.clone();
-                    let project_branch = app.pending_project_branch.clone();
-                    let folder = Project::make_folder_path(&project_name);
+                    let folder = Project::make_folder_path(&name);
                     let project = Project {
-                        name: project_name.clone(),
-                        branch: project_branch,
+                        name: name.clone(),
+                        branch,
                         worktrees: Vec::new(),
                         folder: folder.clone(),
                     };
@@ -694,6 +668,15 @@ fn handle_push_project(app: &mut App, p_idx: usize, commit_msg: Option<String>) 
         app.error_message = Some("Some pushes failed (see output, Ctrl+L to export)".to_string());
         app.full_error_detail = Some(app.command_output.join("\n"));
     }
+}
+
+/// Derives a git branch name from a human-readable project name.
+/// Lowercases, replaces runs of non-alphanumeric characters with a single hyphen.
+fn branch_from_name(name: &str) -> String {
+    let raw: String = name.trim().to_lowercase().chars()
+        .map(|c| if c.is_alphanumeric() || c == '/' || c == '.' { c } else { '-' })
+        .collect();
+    raw.split('-').filter(|s| !s.is_empty()).collect::<Vec<_>>().join("-")
 }
 
 /// Sanitizes a string for use as a tmux session name.

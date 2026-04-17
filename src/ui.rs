@@ -167,10 +167,26 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
 
     match app.input_mode {
         InputMode::AddingProjectName => {
-            output_lines.push(Line::from(format!("  Project name> {}", app.input)));
-        }
-        InputMode::AddingProjectBranch => {
-            output_lines.push(Line::from(format!("  Branch name> {}", app.input)));
+            let dim = Style::default().fg(Color::DarkGray);
+            output_lines.push(Line::from(""));
+            output_lines.push(Line::from(Span::styled(
+                "  A project is a temporary unit of work — a named grouping of context",
+                dim,
+            )));
+            output_lines.push(Line::from(Span::styled(
+                "  across one or more repos. Give it a short name; the branch is derived",
+                dim,
+            )));
+            output_lines.push(Line::from(Span::styled(
+                "  from it automatically.",
+                dim,
+            )));
+            output_lines.push(Line::from(""));
+            output_lines.push(Line::from(vec![
+                Span::styled("  Project name> ", Style::default().fg(Color::Yellow)),
+                Span::raw(app.input.as_str()),
+                Span::styled("_", Style::default().fg(Color::DarkGray)),
+            ]));
         }
         InputMode::EditingCommitMessage => {
             output_lines.push(Line::from(format!("  Commit msg> {}", app.input)));
@@ -222,10 +238,7 @@ fn build_help_lines(app: &App) -> Vec<Line<'static>> {
             lines.push(Line::from(" [n] new project  [o] options  [h] help  [q] quit"));
         }
         InputMode::AddingProjectName => {
-            lines.push(Line::from(" Enter project name (Enter: next, Esc: cancel)"));
-        }
-        InputMode::AddingProjectBranch => {
-            lines.push(Line::from(" Enter branch name (Enter: create project, Esc: cancel)"));
+            lines.push(Line::from(" Enter a name for the project (Enter: create, Esc: cancel)"));
         }
         InputMode::AddingRepo => {
             lines.push(Line::from(" Type path or ↑/↓ to pick suggestion  Enter: add  Enter (empty): done  Esc: cancel"));
@@ -387,7 +400,7 @@ fn render_help(
         Line::from(Span::styled(" Global", h)),
         row!("q / Ctrl+C", "Quit"),
         row!("↑ / ↓", "Navigate list"),
-        row!("n", "New project (name → branch → add repos)"),
+        row!("n", "New project (name → add repos)"),
         row!("o", "Options (toggle tmux, etc.)"),
         row!("h", "This help screen"),
         row!("Ctrl+L", "Export error log to /tmp/workman.log"),

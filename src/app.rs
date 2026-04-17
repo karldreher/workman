@@ -15,8 +15,7 @@ pub enum Selection {
 #[derive(PartialEq)]
 pub enum InputMode {
     Normal,
-    AddingProjectName,   // step 1 of project creation: name
-    AddingProjectBranch, // step 2 of project creation: branch
+    AddingProjectName,   // step 1 of project creation: name (branch derived automatically)
     AddingRepo,          // path input + fuzzy suggestions for adding a repo to a project
     ViewingDiff,
     EditingCommitMessage,
@@ -47,7 +46,6 @@ pub struct App {
     pub expanded_projects: HashSet<usize>,
     // Project creation state
     pub pending_project_name: String,
-    pub pending_project_branch: String,
     // Fuzzy repo picker state (AddingRepo mode)
     pub fuzzy_results: Vec<FuzzyEntry>,
     pub fuzzy_cursor: Option<usize>, // None = cursor at text input; Some(i) = suggestion highlighted
@@ -76,7 +74,6 @@ impl App {
             worktree_status: HashMap::new(),
             expanded_projects,
             pending_project_name: String::new(),
-            pending_project_branch: String::new(),
             fuzzy_results: Vec::new(),
             fuzzy_cursor: None,
             adding_to_project: None,
@@ -280,7 +277,6 @@ mod tests {
             worktree_status: HashMap::new(),
             expanded_projects: HashSet::new(),
             pending_project_name: String::new(),
-            pending_project_branch: String::new(),
             fuzzy_results: Vec::new(),
             fuzzy_cursor: None,
             adding_to_project: None,
