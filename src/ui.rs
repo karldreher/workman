@@ -12,8 +12,8 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
     let main_layout = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([
-            Constraint::Percentage(33),
-            Constraint::Percentage(67),
+            Constraint::Percentage(60),
+            Constraint::Percentage(40),
         ].as_ref())
         .split(f.area());
 
