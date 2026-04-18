@@ -29,7 +29,7 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
 
     let help_split = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
         .split(help_inner);
 
     f.render_widget(
@@ -44,7 +44,7 @@ pub fn ui(f: &mut ratatui::Frame, app: &mut App) {
     // ── Content area: 60% tree | 40% output ─────────────────────────────
     let main_layout = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
         .split(root_layout[1]);
 
     let output_area = main_layout[1];
@@ -322,6 +322,22 @@ fn context_description(app: &App) -> Vec<Line<'static>> {
         }
         InputMode::Options => "Settings. Changes are saved immediately.".to_string(),
         InputMode::Help => "Keybinding reference. Press any key to close.".to_string(),
+        InputMode::ConfirmDelete => {
+            let warn = Style::default().fg(Color::Yellow);
+            let text = match app.pending_delete {
+                Some(Selection::Project(p_idx)) => format!(
+                    "Remove project \"{}\" and all its worktrees? This cannot be undone.",
+                    app.config.projects[p_idx].name
+                ),
+                Some(Selection::Worktree(p_idx, w_idx)) => format!(
+                    "Remove worktree \"{}\" from project \"{}\"? This cannot be undone.",
+                    app.config.projects[p_idx].worktrees[w_idx].repo_name,
+                    app.config.projects[p_idx].name
+                ),
+                None => "Confirm deletion?".to_string(),
+            };
+            return vec![Line::from(Span::styled(text, warn))];
+        }
     };
 
     vec![Line::from(Span::styled(text, dim))]
@@ -370,6 +386,10 @@ fn context_shortcut_lines(app: &App) -> Vec<Line<'static>> {
             named_key_line("Esc", "close"),
         ],
         InputMode::Help => vec![named_key_line("any key", "close")],
+        InputMode::ConfirmDelete => vec![
+            named_key_line("y / Enter", "confirm delete"),
+            named_key_line("n / Esc", "cancel"),
+        ],
     }
 }
 

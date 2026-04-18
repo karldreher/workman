@@ -68,14 +68,12 @@ pub async fn handle_key_event(
                 }
             }
 
-            // Remove project (all worktrees + folder) or remove single worktree
+            // Remove project or worktree — requires confirmation
             KeyCode::Char('x') => {
                 match app.get_selected_selection() {
-                    Some(Selection::Project(p_idx)) => {
-                        handle_remove_project(app, p_idx);
-                    }
-                    Some(Selection::Worktree(p_idx, w_idx)) => {
-                        handle_remove_worktree(app, p_idx, w_idx);
+                    Some(sel @ Selection::Project(_)) | Some(sel @ Selection::Worktree(_, _)) => {
+                        app.pending_delete = Some(sel);
+                        app.input_mode = InputMode::ConfirmDelete;
                     }
                     _ => {}
                 }
@@ -367,6 +365,25 @@ pub async fn handle_key_event(
                 app.fuzzy_results.clear();
                 app.fuzzy_cursor = None;
                 app.adding_to_project = None;
+                app.error_message = None;
+            }
+            _ => {}
+        },
+
+        // ── Delete confirmation ───────────────────────────────────────────
+        InputMode::ConfirmDelete => match key.code {
+            KeyCode::Char('y') | KeyCode::Enter => {
+                if let Some(sel) = app.pending_delete.take() {
+                    match sel {
+                        Selection::Project(p_idx) => handle_remove_project(app, p_idx),
+                        Selection::Worktree(p_idx, w_idx) => handle_remove_worktree(app, p_idx, w_idx),
+                    }
+                }
+                app.input_mode = InputMode::Normal;
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                app.pending_delete = None;
+                app.input_mode = InputMode::Normal;
                 app.error_message = None;
             }
             _ => {}

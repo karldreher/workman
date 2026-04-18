@@ -22,6 +22,7 @@ pub enum InputMode {
     Terminal,
     Options,
     Help,
+    ConfirmDelete,
 }
 
 /// A single entry in the fuzzy suggestion list shown in AddingRepo mode.
@@ -61,6 +62,8 @@ pub struct App {
     pub adding_to_project: Option<usize>,
     // Options overlay cursor
     pub options_cursor: usize,
+    // Pending destructive delete awaiting confirmation
+    pub pending_delete: Option<Selection>,
 }
 
 impl App {
@@ -86,6 +89,7 @@ impl App {
             fuzzy_cursor: None,
             adding_to_project: None,
             options_cursor: 0,
+            pending_delete: None,
         };
         if has_items {
             app.tree_state.select(Some(0));
@@ -289,6 +293,7 @@ mod tests {
             fuzzy_cursor: None,
             adding_to_project: None,
             options_cursor: 0,
+            pending_delete: None,
         }
     }
 
