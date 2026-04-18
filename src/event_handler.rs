@@ -3,13 +3,15 @@ use anyhow::Result;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::{fs, path::PathBuf};
 
-use crate::app::{App, InputMode, Selection};
-use crate::models::{Config, Project, Worktree};
+use crate::app::{branch_from_name, App, InputMode, Selection};
+use crate::models::{Config, Project, ProjectWorktree, Repo};
 use crate::session::Session;
 
 pub enum AppState {
     Continue,
     Quit,
+    /// Suspend workman, run a tmux session, then resume.
+    TmuxSession { path: PathBuf, session_name: String },
 }
 
 pub async fn handle_key_event(
@@ -18,14 +20,14 @@ pub async fn handle_key_event(
     current_width: u16,
     current_height: u16,
 ) -> Result<AppState> {
-    // Global Ctrl+C handler (except in Terminal mode where it might be sent to PTY)
+    // Global Ctrl+C
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
         if app.input_mode != InputMode::Terminal {
             return Ok(AppState::Quit);
         }
     }
 
-    // Global Ctrl+L
+    // Global Ctrl+L: export log
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('l') {
         if let Some(detail) = &app.full_error_detail {
             let _ = fs::write("/tmp/workman.log", detail);
@@ -34,117 +36,116 @@ pub async fn handle_key_event(
             let _ = fs::write("/tmp/workman.log", err);
             app.error_message = Some("Status exported to /tmp/workman.log".to_string());
         }
+        return Ok(AppState::Continue);
     }
 
     match app.input_mode {
+        // ── Normal mode ──────────────────────────────────────────────────
         InputMode::Normal => match key.code {
             KeyCode::Char('q') => return Ok(AppState::Quit),
-            KeyCode::Char('a') => {
-                app.input_mode = InputMode::AddingProjectPath;
+
+            // New project
+            KeyCode::Char('n') => {
+                app.input_mode = InputMode::AddingProjectName;
                 app.input.clear();
+                app.pending_project_name.clear();
                 app.error_message = None;
                 app.full_error_detail = None;
             }
-            KeyCode::Char('x') => {
+
+            // Add a repo to the selected project (opens fuzzy path picker)
+            KeyCode::Char('a') => {
                 if let Some(Selection::Project(p_idx)) = app.get_selected_selection() {
-                    app.config.projects.remove(p_idx);
-                    app.save_config();
-                    if app.config.projects.is_empty() {
-                        app.tree_state.select(None);
-                    } else {
-                        let new_idx = if p_idx >= app.config.projects.len() { app.config.projects.len() - 1 } else { p_idx };
-                        app.tree_state.select(Some(new_idx));
-                    }
-                }
-                app.error_message = None;
-                app.full_error_detail = None;
-            }
-            KeyCode::Char('w') => {
-                if let Some(Selection::Project(_)) = app.get_selected_selection() {
-                    app.input_mode = InputMode::AddingWorktreeName;
+                    app.adding_to_project = Some(p_idx);
+                    app.fuzzy_cursor = None;
                     app.input.clear();
+                    app.update_fuzzy_results();
+                    app.input_mode = InputMode::AddingRepo;
                     app.error_message = None;
                     app.full_error_detail = None;
+                } else {
+                    app.error_message = Some("Select a project first.".to_string());
                 }
             }
-            KeyCode::Char('r') => {
-                if let Some(sel @ Selection::Worktree(_p_idx, _w_idx)) = app.get_selected_selection() {
-                    let Selection::Worktree(p_idx, w_idx) = sel else { unreachable!() };
 
-                    match app.config.projects[p_idx].remove_worktree(w_idx) {
-                        Ok(out) => {
-                            let mut full_output = Vec::new();
-                            full_output.extend_from_slice(&out.stdout);
-                            full_output.extend_from_slice(&out.stderr);
-
-                            if let Some(session) = app.sessions.get(&sel) {
-                                session.parser.lock().unwrap().process(&full_output);
-                            } else {
-                                app.command_output = String::from_utf8_lossy(&full_output).lines().map(String::from).collect();
-                            }
-
-                            if out.status.success() {
-                                app.config.projects[p_idx].worktrees.remove(w_idx);
-                                app.save_config();
-                                app.refresh_worktree_status();
-                                app.error_message = None;
-                                app.full_error_detail = None;
-                                if app.config.projects[p_idx].worktrees.is_empty() {
-                                    app.tree_state.select(None);
-                                } else {
-                                    let new_idx = if w_idx >= app.config.projects[p_idx].worktrees.len() { app.config.projects[p_idx].worktrees.len() - 1 } else { w_idx };
-                                    let items = app.get_tree_items();
-                                    if let Some(new_sel_idx) = items.iter().position(|(_, s, _)| *s == Selection::Worktree(p_idx, new_idx)) {
-                                        app.tree_state.select(Some(new_sel_idx));
-                                    } else if let Some(proj_sel_idx) = items.iter().position(|(_, s, _)| *s == Selection::Project(p_idx)) {
-                                        app.tree_state.select(Some(proj_sel_idx));
-                                    }
-                                }
-                            } else {
-                                app.error_message = Some("Failed to remove worktree".to_string());
-                                if !app.sessions.contains_key(&sel) {
-                                    app.full_error_detail = Some(app.command_output.join("\n"));
-                                }
-                            }
-                        },
-                        Err(e) => {
-                            app.error_message = Some("System error occurred".to_string());
-                            app.full_error_detail = Some(e.to_string());
-                        }
+            // Remove project or worktree — requires confirmation
+            KeyCode::Char('x') => {
+                match app.get_selected_selection() {
+                    Some(sel @ Selection::Project(_)) | Some(sel @ Selection::Worktree(_, _)) => {
+                        app.pending_delete = Some(sel);
+                        app.input_mode = InputMode::ConfirmDelete;
                     }
+                    _ => {}
                 }
             }
-            KeyCode::Char('c') => {
-                if let Some(sel) = app.get_selected_selection() {
-                    if let Selection::Worktree(p_idx, w_idx) = sel {
+
+            // Open terminal (worktree or project level)
+            KeyCode::Char('t') => {
+                match app.get_selected_selection() {
+                    Some(sel @ Selection::Worktree(p_idx, w_idx)) => {
+                        let wt_path = app.config.projects[p_idx].worktrees[w_idx].path.clone();
+                        let repo_name = app.config.projects[p_idx].worktrees[w_idx].repo_name.clone();
+                        let project_name = app.config.projects[p_idx].name.clone();
+
+                        if app.config.settings.use_tmux {
+                            let session_name = sanitize_tmux_name(&format!(
+                                "workman-{}-{}", project_name, repo_name
+                            ));
+                            return Ok(AppState::TmuxSession { path: wt_path, session_name });
+                        }
+
                         if !app.sessions.contains_key(&sel) {
-                            let path = app.config.projects[p_idx].worktrees[w_idx].path.clone();
-                            match Session::new(path, current_width, current_height) {
-                                Ok(session) => {
-                                    app.sessions.insert(sel, session);
-                                }
+                            match Session::new(wt_path, current_width, current_height) {
+                                Ok(session) => { app.sessions.insert(sel, session); }
                                 Err(e) => {
                                     app.error_message = Some(format!("Failed to start session: {}", e));
+                                    return Ok(AppState::Continue);
                                 }
                             }
                         }
-                        if app.sessions.contains_key(&sel) {
-                            app.input_mode = InputMode::Terminal;
-                        }
+                        app.input_mode = InputMode::Terminal;
                     }
+                    Some(sel @ Selection::Project(p_idx)) => {
+                        let folder = app.config.projects[p_idx].folder.clone();
+                        let project_name = app.config.projects[p_idx].name.clone();
+
+                        if app.config.settings.use_tmux {
+                            let session_name = sanitize_tmux_name(&format!("workman-{}", project_name));
+                            return Ok(AppState::TmuxSession { path: folder, session_name });
+                        }
+
+                        if !app.sessions.contains_key(&sel) {
+                            match Session::new(folder, current_width, current_height) {
+                                Ok(session) => { app.sessions.insert(sel, session); }
+                                Err(e) => {
+                                    app.error_message = Some(format!("Failed to start session: {}", e));
+                                    return Ok(AppState::Continue);
+                                }
+                            }
+                        }
+                        app.input_mode = InputMode::Terminal;
+                    }
+                    _ => {}
                 }
             }
+
+            // Push: single worktree or all worktrees in project
             KeyCode::Char('p') => {
-                if let Some(_sel @ Selection::Worktree(_p_idx, _w_idx)) = app.get_selected_selection() {
-                    app.input_mode = InputMode::EditingCommitMessage;
-                    app.input.clear();
-                    app.error_message = None;
-                    app.full_error_detail = None;
+                match app.get_selected_selection() {
+                    Some(Selection::Worktree(_, _)) | Some(Selection::Project(_)) => {
+                        app.input_mode = InputMode::EditingCommitMessage;
+                        app.input.clear();
+                        app.error_message = None;
+                        app.full_error_detail = None;
+                    }
+                    _ => {}
                 }
             }
+
+            // Diff (worktree only)
             KeyCode::Char('d') => {
-                if let Some(sel @ Selection::Worktree(_p_idx, _w_idx)) = app.get_selected_selection() {
-                    match app.config.projects[_p_idx].worktrees[_w_idx].get_diff() {
+                if let Some(sel @ Selection::Worktree(p_idx, w_idx)) = app.get_selected_selection() {
+                    match app.config.projects[p_idx].worktrees[w_idx].get_diff() {
                         Ok(out) => {
                             let mut full_output = Vec::new();
                             full_output.extend_from_slice(&out.stdout);
@@ -152,24 +153,15 @@ pub async fn handle_key_event(
 
                             if let Some(session) = app.sessions.get(&sel) {
                                 session.parser.lock().unwrap().process(&full_output);
+                                app.input_mode = InputMode::ViewingDiff;
                             } else {
-                                app.command_output = String::from_utf8_lossy(&full_output).lines().map(String::from).collect();
-                            }
-
-                            if !out.status.success() {
-                                app.error_message = Some("Failed to get diff".to_string());
-                                if !app.sessions.contains_key(&sel) {
+                                app.command_output = String::from_utf8_lossy(&full_output)
+                                    .lines().map(String::from).collect();
+                                if !out.status.success() {
+                                    app.error_message = Some("Failed to get diff".to_string());
                                     app.full_error_detail = Some(app.command_output.join("\n"));
-                                }
-                                app.input_mode = InputMode::Normal;
-                                app.diff_scroll_offset = 0;
-                            } else {
-                                if app.command_output.is_empty() && !app.sessions.contains_key(&sel) {
-                                    app.error_message = Some("No changes to display diff for.".to_string());
-                                    app.full_error_detail = None;
-                                    app.command_output.clear();
-                                    app.input_mode = InputMode::Normal;
-                                    app.diff_scroll_offset = 0;
+                                } else if app.command_output.is_empty() {
+                                    app.error_message = Some("No changes to diff.".to_string());
                                 } else {
                                     app.input_mode = InputMode::ViewingDiff;
                                     app.error_message = None;
@@ -177,25 +169,49 @@ pub async fn handle_key_event(
                                     app.diff_scroll_offset = 0;
                                 }
                             }
-                        },
+                        }
                         Err(e) => {
-                            app.error_message = Some("System error occurred while getting diff".to_string());
+                            app.error_message = Some("System error getting diff".to_string());
                             app.full_error_detail = Some(e.to_string());
-                            app.input_mode = InputMode::Normal;
-                            app.diff_scroll_offset = 0;
                         }
                     }
                 }
             }
+
+            // Options overlay
+            KeyCode::Char('o') => {
+                app.input_mode = InputMode::Options;
+                app.options_cursor = 0;
+                app.error_message = None;
+            }
+
+            // Help view
+            KeyCode::Char('h') => {
+                app.input_mode = InputMode::Help;
+                app.error_message = None;
+            }
+
+            // Expand/collapse project
+            KeyCode::Enter => {
+                if let Some(Selection::Project(p_idx)) = app.get_selected_selection() {
+                    app.toggle_project_expand(p_idx);
+                }
+            }
+
             KeyCode::Down => app.next(),
             KeyCode::Up => app.previous(),
             KeyCode::Esc => {
                 app.error_message = None;
                 app.full_error_detail = None;
+                app.command_output.clear();
             }
             _ => {}
         },
+
+        // ── Terminal mode ─────────────────────────────────────────────────
         InputMode::Terminal => terminal_handler::handle_terminal_key_event(key, app),
+
+        // ── Viewing diff ──────────────────────────────────────────────────
         InputMode::ViewingDiff => match key.code {
             KeyCode::Char(' ') => {
                 if app.diff_scroll_offset + 1 < app.command_output.len() {
@@ -209,156 +225,171 @@ pub async fn handle_key_event(
                 app.error_message = None;
                 app.full_error_detail = None;
                 app.input.clear();
-                app.command_output.clear(); // Clear traditional output, session output remains
+                app.command_output.clear();
                 app.diff_scroll_offset = 0;
             }
             _ => {}
         },
-        InputMode::AddingProjectPath => match key.code {
-            KeyCode::Enter => {
-                let path_str = app.input.trim().to_string();
-                let path = PathBuf::from(&path_str);
-                match Config::validate_project_path(&path) {
-                    Ok(_) => {
-                        let abs_path = fs::canonicalize(&path).unwrap();
-                        let name = abs_path.file_name().unwrap().to_string_lossy().to_string();
-                        app.config.projects.push(Project {
-                            name,
-                            path: abs_path,
-                            worktrees: Vec::new(),
-                        });
-                        app.save_config();
-                        app.input_mode = InputMode::Normal;
-                        let items = app.get_tree_items();
-                        if let Some(new_sel_idx) = items.iter().position(|(_, sel, _)| {
-                            if let Selection::Project(p_idx) = sel {
-                                *p_idx == app.config.projects.len() - 1
-                            } else { false }
-                        }) {
-                            app.tree_state.select(Some(new_sel_idx));
-                        }
-                        app.error_message = None;
-                        app.full_error_detail = None;
-                    }
-                    Err(e) => {
-                        app.error_message = Some(e.to_string());
-                        app.full_error_detail = Some(e.to_string());
-                    }
+
+        // ── Options overlay ───────────────────────────────────────────────
+        InputMode::Options => match key.code {
+            KeyCode::Esc => {
+                app.input_mode = InputMode::Normal;
+            }
+            KeyCode::Up => {
+                if app.options_cursor > 0 {
+                    app.options_cursor -= 1;
                 }
             }
-            KeyCode::Tab => {
-                if app.path_completions.is_empty() {
-                    app.update_completions();
+            KeyCode::Down => {
+                // Extend upper bound as more settings are added
+                let max_idx = 0usize; // currently 1 option
+                if app.options_cursor < max_idx {
+                    app.options_cursor += 1;
                 }
-                if !app.path_completions.is_empty() {
-                    let idx = match app.completion_idx {
-                        Some(i) => (i + 1) % app.path_completions.len(),
-                        None => 0,
+            }
+            KeyCode::Char(' ') | KeyCode::Enter => {
+                match app.options_cursor {
+                    0 => {
+                        app.config.settings.use_tmux = !app.config.settings.use_tmux;
+                        app.save_config();
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        },
+
+        // ── Help view ─────────────────────────────────────────────────────
+        InputMode::Help => {
+            app.input_mode = InputMode::Normal;
+        }
+
+        // ── Project name ──────────────────────────────────────────────────
+        InputMode::AddingProjectName => match key.code {
+            KeyCode::Enter => {
+                let name = app.input.trim().to_string();
+                if name.is_empty() {
+                    app.error_message = Some("Project name cannot be empty.".to_string());
+                } else if app.config.projects.iter().any(|p| p.name == name) {
+                    app.error_message = Some(format!("Project '{}' already exists.", name));
+                } else {
+                    let branch = branch_from_name(&name);
+                    app.input.clear();
+                    // Create the project immediately, then drop into AddingRepo
+                    let folder = Project::make_folder_path(&name);
+                    let project = Project {
+                        name: name.clone(),
+                        branch,
+                        worktrees: Vec::new(),
+                        folder: folder.clone(),
                     };
-                    app.completion_idx = Some(idx);
-                    app.input = app.path_completions[idx].clone();
+                    let _ = project.create_folder();
+                    app.config.projects.push(project);
+                    let new_p_idx = app.config.projects.len() - 1;
+                    app.expanded_projects.insert(new_p_idx);
+                    app.save_config();
+                    let items = app.get_tree_items();
+                    if let Some(idx) = items.iter().position(|(_, s, _)| *s == Selection::Project(new_p_idx)) {
+                        app.tree_state.select(Some(idx));
+                    }
+                    // Immediately enter repo picker for the new project
+                    app.adding_to_project = Some(new_p_idx);
+                    app.fuzzy_cursor = None;
+                    app.update_fuzzy_results();
+                    app.input_mode = InputMode::AddingRepo;
+                    app.error_message = None;
+                }
+            }
+            KeyCode::Char(c) => { app.input.push(c); app.error_message = None; }
+            KeyCode::Backspace => { app.input.pop(); }
+            KeyCode::Esc => {
+                app.input_mode = InputMode::Normal;
+                app.input.clear();
+                app.error_message = None;
+            }
+            _ => {}
+        },
+
+        // ── Fuzzy repo picker ─────────────────────────────────────────────
+        InputMode::AddingRepo => match key.code {
+            KeyCode::Tab => {
+                // Complete into the highlighted suggestion (or the first one)
+                let target = app.fuzzy_cursor
+                    .filter(|&i| i < app.fuzzy_results.len())
+                    .or_else(|| if !app.fuzzy_results.is_empty() { Some(0) } else { None });
+                if let Some(i) = target {
+                    let mut path = app.fuzzy_results[i].path.to_string_lossy().to_string();
+                    // Append trailing slash for directories so the user can keep browsing
+                    if !path.ends_with('/') { path.push('/'); }
+                    app.input = path;
+                    app.fuzzy_cursor = None;
+                    app.error_message = None;
+                    app.update_fuzzy_results();
                 }
             }
             KeyCode::Char(c) => {
                 app.input.push(c);
+                app.fuzzy_cursor = None; // reset selection on new input
                 app.error_message = None;
-                app.path_completions.clear();
+                app.update_fuzzy_results();
             }
             KeyCode::Backspace => {
                 app.input.pop();
-                app.path_completions.clear();
-            }
-            KeyCode::Esc => {
-                app.input_mode = InputMode::Normal;
+                app.fuzzy_cursor = None;
                 app.error_message = None;
-                app.full_error_detail = None;
-                app.input.clear();
+                app.update_fuzzy_results();
             }
-            _ => {}
-        },
-        InputMode::AddingWorktreeName => match key.code {
+            KeyCode::Up => {
+                if !app.fuzzy_results.is_empty() {
+                    app.fuzzy_cursor = Some(match app.fuzzy_cursor {
+                        None | Some(0) => app.fuzzy_results.len() - 1,
+                        Some(i) => i - 1,
+                    });
+                }
+            }
+            KeyCode::Down => {
+                if !app.fuzzy_results.is_empty() {
+                    app.fuzzy_cursor = Some(match app.fuzzy_cursor {
+                        None => 0,
+                        Some(i) => (i + 1) % app.fuzzy_results.len(),
+                    });
+                }
+            }
             KeyCode::Enter => {
-                let name = app.input.trim().to_string();
-                if name.is_empty() {
-                    app.error_message = Some("Worktree name cannot be empty".to_string());
-                    app.full_error_detail = Some("Worktree name cannot be empty".to_string());
-                    return Ok(AppState::Continue);
-                }
-
-                if let Some(Selection::Project(p_idx)) = app.get_selected_selection() {
-                    let wt_name = name.clone();
-                    let branch = name;
-                    let workman_dir = app.config.projects[p_idx].path.join(".workman");
-                    let wt_path = workman_dir.join(&wt_name);
-
-                    match app.config.projects[p_idx].add_worktree(&wt_name, wt_path.clone(), &branch) {
-                        Ok(out) if out.status.success() => {
-                            let mut full_output = Vec::new();
-                            full_output.extend_from_slice(&out.stdout);
-                            full_output.extend_from_slice(&out.stderr);
-
-                            if let Some(session) = app.sessions.get(&Selection::Worktree(p_idx, app.config.projects[p_idx].worktrees.len())) { // Predicting the selection for the new worktree
-                                session.parser.lock().unwrap().process(&full_output);
-                            } else {
-                                app.command_output = String::from_utf8_lossy(&full_output).lines().map(String::from).collect();
-                            }
-
-                            app.config.projects[p_idx].worktrees.push(Worktree {
-                                name: wt_name,
-                                path: wt_path,
-                            });
-                            app.save_config();
-                            app.refresh_worktree_status();
-                            app.input_mode = InputMode::Normal;
-                            app.error_message = None;
-                            app.full_error_detail = None;
-                            app.input.clear();
-                            let items = app.get_tree_items();
-                            if let Some(new_sel_idx) = items.iter().position(|(_, sel, _)| {
-                                if let Selection::Worktree(proj_idx, wt_idx) = sel {
-                                    *proj_idx == p_idx && *wt_idx == app.config.projects[p_idx].worktrees.len() - 1
-                                } else { false }
-                            }) {
-                                app.tree_state.select(Some(new_sel_idx));
-                            }
-                        }
-                        Ok(out) => {
-                            let mut full_output = Vec::new();
-                            full_output.extend_from_slice(&out.stdout);
-                            full_output.extend_from_slice(&out.stderr);
-                            if let Some(session) = app.sessions.get(&Selection::Project(p_idx)) { // Fallback if no worktree selected
-                                session.parser.lock().unwrap().process(&full_output);
-                            } else {
-                                app.command_output = String::from_utf8_lossy(&full_output).lines().map(String::from).collect();
-                            }
-                            app.error_message = Some("Worktree creation failed (Ctrl+L to export log)".to_string());
-                            if !app.sessions.contains_key(&Selection::Project(p_idx)) {
-                                app.full_error_detail = Some(app.command_output.join("\n"));
-                            }
-                            app.input = branch;
-                        }
-                        Err(e) => {
-                            app.error_message = Some("System error occurred".to_string());
-                            app.full_error_detail = Some(e.to_string());
-                            app.input = branch;
-                        }
-                    }
-                } else {
-                    app.error_message = Some("No project selected to add worktree to.".to_string());
-                    app.full_error_detail = Some("No project selected to add worktree to.".to_string());
-                }
+                handle_add_repo(app).await?;
             }
-            KeyCode::Char(c) => app.input.push(c),
-            KeyCode::Backspace => { app.input.pop(); }
             KeyCode::Esc => {
                 app.input_mode = InputMode::Normal;
-                app.error_message = None;
-                app.full_error_detail = None;
                 app.input.clear();
+                app.fuzzy_results.clear();
+                app.fuzzy_cursor = None;
+                app.adding_to_project = None;
+                app.error_message = None;
             }
             _ => {}
         },
 
+        // ── Delete confirmation ───────────────────────────────────────────
+        InputMode::ConfirmDelete => match key.code {
+            KeyCode::Char('y') | KeyCode::Enter => {
+                if let Some(sel) = app.pending_delete.take() {
+                    match sel {
+                        Selection::Project(p_idx) => handle_remove_project(app, p_idx),
+                        Selection::Worktree(p_idx, w_idx) => handle_remove_worktree(app, p_idx, w_idx),
+                    }
+                }
+                app.input_mode = InputMode::Normal;
+            }
+            KeyCode::Char('n') | KeyCode::Esc => {
+                app.pending_delete = None;
+                app.input_mode = InputMode::Normal;
+                app.error_message = None;
+            }
+            _ => {}
+        },
+
+        // ── Commit message → push ─────────────────────────────────────────
         InputMode::EditingCommitMessage => match key.code {
             KeyCode::Enter => {
                 let commit_msg = if app.input.trim().is_empty() {
@@ -367,50 +398,14 @@ pub async fn handle_key_event(
                     Some(app.input.trim().to_string())
                 };
 
-                if let Some(sel @ Selection::Worktree(p_idx, w_idx)) = app.get_selected_selection() {
-                    match app.config.projects[p_idx].worktrees[w_idx].push(commit_msg) {
-                        Ok((add_out, commit_out, push_out)) => {
-                            let mut full_output = Vec::new();
-
-                            // Collect all outputs
-                            full_output.extend_from_slice(&add_out.stdout);
-                            full_output.extend_from_slice(&add_out.stderr);
-                            full_output.extend_from_slice(&commit_out.stdout);
-                            full_output.extend_from_slice(&commit_out.stderr);
-                            full_output.extend_from_slice(&push_out.stdout);
-                            full_output.extend_from_slice(&push_out.stderr);
-
-                            if let Some(session) = app.sessions.get(&sel) {
-                                session.parser.lock().unwrap().process(&full_output);
-                            } else {
-                                app.command_output = String::from_utf8_lossy(&full_output).lines().map(String::from).collect();
-                            }
-
-                            // Check if push succeeded
-                            if !push_out.status.success() {
-                                app.error_message = Some("Push failed".to_string());
-                                if !app.sessions.contains_key(&sel) {
-                                    app.full_error_detail = Some(app.command_output.join("\n"));
-                                }
-                            } else {
-                                // Success: prepend success message to output
-                                let mut success_output = "Push successful!\n".to_string().into_bytes();
-                                success_output.extend(full_output);
-                                if let Some(session) = app.sessions.get(&sel) {
-                                    session.parser.lock().unwrap().process(&success_output);
-                                } else {
-                                    app.command_output = String::from_utf8_lossy(&success_output).lines().map(String::from).collect();
-                                }
-                                app.refresh_worktree_status();
-                                app.error_message = None;
-                                app.full_error_detail = None;
-                            }
-                        },
-                        Err(e) => {
-                            app.error_message = Some("System error occurred during push".to_string());
-                            app.full_error_detail = Some(e.to_string());
-                        }
+                match app.get_selected_selection() {
+                    Some(sel @ Selection::Worktree(p_idx, w_idx)) => {
+                        handle_push_single(app, sel, p_idx, w_idx, commit_msg);
                     }
+                    Some(Selection::Project(p_idx)) => {
+                        handle_push_project(app, p_idx, commit_msg);
+                    }
+                    _ => {}
                 }
                 app.input_mode = InputMode::Normal;
                 app.input.clear();
@@ -419,13 +414,297 @@ pub async fn handle_key_event(
             KeyCode::Backspace => { app.input.pop(); }
             KeyCode::Esc => {
                 app.input_mode = InputMode::Normal;
+                app.input.clear();
                 app.error_message = None;
                 app.full_error_detail = None;
-                app.input.clear();
             }
             _ => {}
         },
     }
 
     Ok(AppState::Continue)
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Removes an entire project: all worktrees, project folder, config entry.
+fn handle_remove_project(app: &mut App, p_idx: usize) {
+    let project = app.config.projects[p_idx].clone();
+    let mut errors: Vec<String> = Vec::new();
+
+    // Remove each git worktree via its parent repo
+    for wt in &project.worktrees {
+        if let Some(repo) = app.config.repos.iter().find(|r| r.name == wt.repo_name) {
+            if let Err(e) = repo.remove_worktree(&wt.path) {
+                errors.push(format!("[{}] remove worktree error: {}", wt.repo_name, e));
+            }
+        }
+    }
+
+    // Remove project folder (symlinks)
+    if let Err(e) = project.remove_folder() {
+        errors.push(format!("remove project folder: {}", e));
+    }
+
+    // Remove session if open
+    app.sessions.remove(&Selection::Project(p_idx));
+    for w_idx in 0..project.worktrees.len() {
+        app.sessions.remove(&Selection::Worktree(p_idx, w_idx));
+    }
+
+    app.config.projects.remove(p_idx);
+    // Re-index expanded_projects
+    let updated: std::collections::HashSet<usize> = app.expanded_projects.iter()
+        .filter_map(|&i| if i == p_idx { None } else if i > p_idx { Some(i - 1) } else { Some(i) })
+        .collect();
+    app.expanded_projects = updated;
+
+    app.save_config();
+    app.refresh_worktree_status();
+
+    if errors.is_empty() {
+        app.error_message = None;
+        app.command_output.clear();
+    } else {
+        app.command_output = errors;
+        app.error_message = Some("Some errors during project removal (see output).".to_string());
+    }
+
+    let items = app.get_tree_items();
+    if items.is_empty() {
+        app.tree_state.select(None);
+    } else {
+        let idx = p_idx.min(items.len() - 1);
+        app.tree_state.select(Some(idx));
+    }
+}
+
+/// Removes a single worktree from a project.
+fn handle_remove_worktree(app: &mut App, p_idx: usize, w_idx: usize) {
+    let wt = app.config.projects[p_idx].worktrees[w_idx].clone();
+    let project_folder = app.config.projects[p_idx].folder.clone();
+
+    // Remove git worktree
+    let git_result = app.config.repos.iter()
+        .find(|r| r.name == wt.repo_name)
+        .map(|repo| repo.remove_worktree(&wt.path));
+
+    match git_result {
+        Some(Ok(out)) if out.status.success() || !wt.path.exists() => {
+            // Remove symlink from project folder
+            let link = project_folder.join(&wt.repo_name);
+            let _ = std::fs::remove_file(&link);
+
+            app.sessions.remove(&Selection::Worktree(p_idx, w_idx));
+            app.config.projects[p_idx].worktrees.remove(w_idx);
+            app.save_config();
+            app.refresh_worktree_status();
+            app.error_message = None;
+            app.full_error_detail = None;
+
+            // Navigate to project row after removing worktree
+            let items = app.get_tree_items();
+            if let Some(proj_idx) = items.iter().position(|(_, s, _)| *s == Selection::Project(p_idx)) {
+                app.tree_state.select(Some(proj_idx));
+            }
+        }
+        Some(Ok(out)) => {
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            app.error_message = Some("Failed to remove worktree".to_string());
+            app.full_error_detail = Some(stderr);
+        }
+        Some(Err(e)) => {
+            app.error_message = Some("System error removing worktree".to_string());
+            app.full_error_detail = Some(e.to_string());
+        }
+        None => {
+            // Repo no longer in registry — remove from project anyway
+            let link = project_folder.join(&wt.repo_name);
+            let _ = std::fs::remove_file(&link);
+            app.sessions.remove(&Selection::Worktree(p_idx, w_idx));
+            app.config.projects[p_idx].worktrees.remove(w_idx);
+            app.save_config();
+            app.refresh_worktree_status();
+            app.error_message = None;
+        }
+    }
+}
+
+/// Confirms the current repo path (or highlighted suggestion) and creates a worktree.
+/// Stays in AddingRepo mode so the user can add more repos without re-entering the flow.
+async fn handle_add_repo(app: &mut App) -> Result<()> {
+    // Resolve the path: use highlighted suggestion if one is active, else typed input
+    let raw_path = match app.fuzzy_cursor {
+        Some(i) if i < app.fuzzy_results.len() => {
+            app.fuzzy_results[i].path.to_string_lossy().to_string()
+        }
+        _ => app.input.trim().to_string(),
+    };
+
+    if raw_path.is_empty() {
+        // Empty Enter with no selection = done, exit the mode
+        app.input_mode = InputMode::Normal;
+        app.input.clear();
+        app.fuzzy_results.clear();
+        app.fuzzy_cursor = None;
+        app.adding_to_project = None;
+        return Ok(());
+    }
+
+    let path = PathBuf::from(&raw_path);
+    let p_idx = match app.adding_to_project {
+        Some(i) => i,
+        None => return Ok(()),
+    };
+
+    match Config::validate_repo_path(&path) {
+        Err(e) => {
+            app.error_message = Some(format!("{}", e));
+        }
+        Ok(_) => {
+            let abs_path = match fs::canonicalize(&path) {
+                Ok(p) => p,
+                Err(e) => { app.error_message = Some(format!("Cannot resolve path: {}", e)); return Ok(()); }
+            };
+            let name = abs_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+
+            // Check if already in this project
+            if app.config.projects[p_idx].worktrees.iter().any(|wt| wt.repo_name == name) {
+                app.error_message = Some(format!("'{}' is already in this project.", name));
+                return Ok(());
+            }
+
+            // Upsert into the repo cache (background — user never sees this)
+            let repo = if let Some(existing) = app.config.repos.iter().find(|r| r.path == abs_path).cloned() {
+                existing
+            } else {
+                let r = Repo { name: name.clone(), path: abs_path.clone() };
+                app.config.repos.push(r.clone());
+                r
+            };
+
+            let branch = app.config.projects[p_idx].branch.clone();
+            match repo.add_worktree(&branch) {
+                Ok((out, wt_path)) if out.status.success() => {
+                    let wt = ProjectWorktree { repo_name: repo.name.clone(), path: wt_path };
+                    let _ = app.config.projects[p_idx].add_symlink(&wt);
+                    app.config.projects[p_idx].worktrees.push(wt);
+                    app.save_config();
+                    app.refresh_worktree_status();
+                    // Clear input, reset cursor, recompute suggestions for next repo
+                    app.input.clear();
+                    app.fuzzy_cursor = None;
+                    app.update_fuzzy_results();
+                    app.error_message = None;
+                    app.full_error_detail = None;
+                }
+                Ok((out, _)) => {
+                    // Save cache even on worktree failure
+                    app.save_config();
+                    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                    app.error_message = Some(format!("Worktree error: {}", stderr.trim()));
+                    app.full_error_detail = Some(stderr);
+                }
+                Err(e) => {
+                    app.save_config();
+                    app.error_message = Some(format!("Error: {}", e));
+                    app.full_error_detail = Some(e.to_string());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Push a single worktree.
+fn handle_push_single(app: &mut App, sel: Selection, p_idx: usize, w_idx: usize, commit_msg: Option<String>) {
+    match app.config.projects[p_idx].worktrees[w_idx].push(commit_msg) {
+        Ok((add_out, commit_out, push_out)) => {
+            let mut full_output = Vec::new();
+            full_output.extend_from_slice(&add_out.stdout);
+            full_output.extend_from_slice(&add_out.stderr);
+            full_output.extend_from_slice(&commit_out.stdout);
+            full_output.extend_from_slice(&commit_out.stderr);
+            full_output.extend_from_slice(&push_out.stdout);
+            full_output.extend_from_slice(&push_out.stderr);
+
+            if let Some(session) = app.sessions.get(&sel) {
+                session.parser.lock().unwrap().process(&full_output);
+            } else {
+                app.command_output = String::from_utf8_lossy(&full_output).lines().map(String::from).collect();
+            }
+
+            if push_out.status.success() {
+                app.refresh_worktree_status();
+                app.error_message = None;
+                app.full_error_detail = None;
+                if !app.sessions.contains_key(&sel) {
+                    let mut success = b"Push successful!\n".to_vec();
+                    success.extend(full_output);
+                    app.command_output = String::from_utf8_lossy(&success).lines().map(String::from).collect();
+                }
+            } else {
+                app.error_message = Some("Push failed (Ctrl+L to export log)".to_string());
+                app.full_error_detail = Some(app.command_output.join("\n"));
+            }
+        }
+        Err(e) => {
+            app.error_message = Some("System error during push".to_string());
+            app.full_error_detail = Some(e.to_string());
+        }
+    }
+}
+
+/// Push all worktrees in a project.
+fn handle_push_project(app: &mut App, p_idx: usize, commit_msg: Option<String>) {
+    let worktrees = app.config.projects[p_idx].worktrees.clone();
+    let mut results: Vec<String> = Vec::new();
+    let mut all_success = true;
+
+    for wt in &worktrees {
+        match wt.push(commit_msg.clone()) {
+            Ok((_, commit_out, push_out)) => {
+                let pushed = push_out.status.success();
+                let committed = commit_out.status.success();
+                if !pushed { all_success = false; }
+
+                let status_icon = if pushed { "✓" } else { "✗" };
+                let detail = if !committed {
+                    let stderr = String::from_utf8_lossy(&commit_out.stderr).trim().to_string();
+                    if stderr.contains("nothing to commit") {
+                        "nothing to commit".to_string()
+                    } else {
+                        stderr
+                    }
+                } else if !pushed {
+                    String::from_utf8_lossy(&push_out.stderr).trim().to_string()
+                } else {
+                    "pushed".to_string()
+                };
+
+                results.push(format!("{} [{}]  {}", status_icon, wt.repo_name, detail));
+            }
+            Err(e) => {
+                all_success = false;
+                results.push(format!("✗ [{}]  error: {}", wt.repo_name, e));
+            }
+        }
+    }
+
+    app.command_output = results;
+    if all_success {
+        app.refresh_worktree_status();
+        app.error_message = None;
+        app.full_error_detail = None;
+    } else {
+        app.error_message = Some("Some pushes failed (see output, Ctrl+L to export)".to_string());
+        app.full_error_detail = Some(app.command_output.join("\n"));
+    }
+}
+
+/// Sanitizes a string for use as a tmux session name.
+fn sanitize_tmux_name(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '-' })
+        .collect()
 }

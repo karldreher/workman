@@ -1,25 +1,42 @@
 use crate::models::Config;
 use crate::session::Session;
 use ratatui::widgets::ListState;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
-use std::collections::HashMap;
 
 #[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub enum Selection {
     Project(usize),
-    Worktree(usize, usize),
+    Worktree(usize, usize), // (project_idx, worktree_idx)
 }
 
 #[derive(PartialEq)]
 pub enum InputMode {
     Normal,
-    AddingProjectPath,
-    AddingWorktreeName,
+    AddingProjectName,   // step 1 of project creation: name (branch derived automatically)
+    AddingRepo,          // path input + fuzzy suggestions for adding a repo to a project
     ViewingDiff,
     EditingCommitMessage,
     Terminal,
+    Options,
+    Help,
+    ConfirmDelete,
+}
+
+/// A single entry in the fuzzy suggestion list shown in AddingRepo mode.
+/// Derives a git branch name from a human-readable project name.
+pub fn branch_from_name(name: &str) -> String {
+    let raw: String = name.trim().to_lowercase().chars()
+        .map(|c| if c.is_alphanumeric() || c == '/' || c == '.' { c } else { '-' })
+        .collect();
+    raw.split('-').filter(|s| !s.is_empty()).collect::<Vec<_>>().join("-")
+}
+
+pub struct FuzzyEntry {
+    pub path: PathBuf,
+    pub known: bool, // true = previously used in another project
 }
 
 pub struct App {
@@ -29,34 +46,52 @@ pub struct App {
     pub input: String,
     pub error_message: Option<String>,
     pub full_error_detail: Option<String>,
-    pub command_output: Vec<String>, // Still needed for non-session output like diffs, and for error details
+    pub command_output: Vec<String>,
     pub diff_scroll_offset: usize,
-    pub path_completions: Vec<String>,
-    pub completion_idx: Option<usize>,
     pub sessions: HashMap<Selection, Session>,
     pub terminal_warning: Option<String>,
     pub worktree_status: HashMap<(usize, usize), String>,
+    // Project expand/collapse state
+    pub expanded_projects: HashSet<usize>,
+    // Project creation state
+    pub pending_project_name: String,
+    // Fuzzy repo picker state (AddingRepo mode)
+    pub fuzzy_results: Vec<FuzzyEntry>,
+    pub fuzzy_cursor: Option<usize>, // None = cursor at text input; Some(i) = suggestion highlighted
+    // Which project we are currently adding a repo to
+    pub adding_to_project: Option<usize>,
+    // Options overlay cursor
+    pub options_cursor: usize,
+    // Pending destructive delete awaiting confirmation
+    pub pending_delete: Option<Selection>,
 }
 
 impl App {
     pub fn new() -> App {
-        let config = Config::load();
+        let (config, migration_notice) = Config::load();
+        let expanded_projects: HashSet<usize> = (0..config.projects.len()).collect();
+        let has_items = !config.projects.is_empty();
         let mut app = App {
             config,
             tree_state: ListState::default(),
             input_mode: InputMode::Normal,
             input: String::new(),
-            error_message: None,
+            error_message: migration_notice,
             full_error_detail: None,
             command_output: Vec::new(),
             diff_scroll_offset: 0,
-            path_completions: Vec::new(),
-            completion_idx: None,
             sessions: HashMap::new(),
             terminal_warning: None,
             worktree_status: HashMap::new(),
+            expanded_projects,
+            pending_project_name: String::new(),
+            fuzzy_results: Vec::new(),
+            fuzzy_cursor: None,
+            adding_to_project: None,
+            options_cursor: 0,
+            pending_delete: None,
         };
-        if !app.config.projects.is_empty() {
+        if has_items {
             app.tree_state.select(Some(0));
         }
         app.refresh_worktree_status();
@@ -76,37 +111,117 @@ impl App {
         let _ = self.config.save();
     }
 
-    pub fn get_tree_items(&self) -> Vec<(String, Selection, Style)> {
-        let mut items = Vec::new();
-        for (p_idx, project) in self.config.projects.iter().enumerate() {
-            items.push((
-                project.name.clone(),
-                Selection::Project(p_idx),
-                Style::default(),
-            ));
-            let wt_count = project.worktrees.len();
-            for (w_idx, wt) in project.worktrees.iter().enumerate() {
-                let prefix = if w_idx == wt_count - 1 {
-                    "└── "
-                } else {
-                    "├── "
-                };
-                let status_str = self.worktree_status
-                    .get(&(p_idx, w_idx))
-                    .map(|s| s.as_str())
-                    .unwrap_or("...");
-                let style = if status_str == "clean" {
-                    Style::default().fg(Color::Green)
-                } else {
-                    Style::default().fg(Color::Red)
-                };
-                items.push((
-                    format!("{} {} ({})", prefix, wt.name, status_str),
-                    Selection::Worktree(p_idx, w_idx),
-                    style,
-                ));
+    /// Recomputes fuzzy suggestions from previously used repos + filesystem directories.
+    /// Call whenever `self.input` changes while in AddingRepo mode.
+    pub fn update_fuzzy_results(&mut self) {
+        let query = self.input.trim().to_lowercase();
+        let mut results: Vec<FuzzyEntry> = Vec::new();
+        let mut known_paths: HashSet<PathBuf> = HashSet::new();
+
+        // 1. Previously used repos promoted to the top.
+        //    When the input looks like a filesystem path (contains '/'), show all known repos
+        //    so they stay visible while the user browses dirs. Otherwise filter by substring.
+        let is_path_input = self.input.contains('/');
+        for repo in &self.config.repos {
+            // Skip repos already wired into the target project
+            if let Some(p_idx) = self.adding_to_project {
+                if p_idx < self.config.projects.len()
+                    && self.config.projects[p_idx].worktrees.iter().any(|wt| wt.repo_name == repo.name)
+                {
+                    continue;
+                }
+            }
+            let matches = if is_path_input || query.is_empty() {
+                true // always show when navigating filesystem or nothing typed
+            } else {
+                let path_str = repo.path.to_string_lossy().to_lowercase();
+                let name_str = repo.name.to_lowercase();
+                path_str.contains(&query) || name_str.contains(&query)
+            };
+            if matches {
+                known_paths.insert(repo.path.clone());
+                results.push(FuzzyEntry { path: repo.path.clone(), known: true });
             }
         }
+
+        // 2. Filesystem directories that match the typed prefix
+        let input_path = PathBuf::from(if self.input.is_empty() { "." } else { &self.input });
+        let (dir, prefix): (PathBuf, String) = if self.input.is_empty() || self.input.ends_with('/') {
+            (input_path, String::new())
+        } else {
+            let p = input_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
+            let f = input_path.file_name().and_then(|s| s.to_str()).unwrap_or("").to_lowercase();
+            (p, f)
+        };
+
+        if let Ok(entries) = fs::read_dir(&dir) {
+            let mut fs_dirs: Vec<PathBuf> = Vec::new();
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if !p.is_dir() { continue; }
+                let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_lowercase();
+                if name.starts_with('.') { continue; } // skip hidden
+                if prefix.is_empty() || name.starts_with(&prefix) {
+                    let canonical = fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
+                    if !known_paths.contains(&canonical) {
+                        fs_dirs.push(p);
+                    }
+                }
+            }
+            fs_dirs.sort();
+            for p in fs_dirs {
+                results.push(FuzzyEntry { path: p, known: false });
+            }
+        }
+
+        // Cap cursor to valid range
+        if let Some(c) = self.fuzzy_cursor {
+            if results.is_empty() {
+                self.fuzzy_cursor = None;
+            } else if c >= results.len() {
+                self.fuzzy_cursor = Some(results.len() - 1);
+            }
+        }
+        self.fuzzy_results = results;
+    }
+
+    /// Builds the flat list of items for the left-panel tree.
+    pub fn get_tree_items(&self) -> Vec<(String, Selection, Style)> {
+        let mut items = Vec::new();
+
+        for (p_idx, project) in self.config.projects.iter().enumerate() {
+            let is_expanded = self.expanded_projects.contains(&p_idx);
+            let prefix = if is_expanded { "▼" } else { "▶" };
+            items.push((
+                format!("{} {}", prefix, project.name),
+                Selection::Project(p_idx),
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
+
+            if is_expanded {
+                let wt_count = project.worktrees.len();
+                for (w_idx, wt) in project.worktrees.iter().enumerate() {
+                    let tree_sym = if w_idx == wt_count - 1 { "└──" } else { "├──" };
+                    let status_str = self.worktree_status
+                        .get(&(p_idx, w_idx))
+                        .map(|s| s.as_str())
+                        .unwrap_or("...");
+                    let style = if status_str == "clean" {
+                        Style::default().fg(Color::Green)
+                    } else if status_str == "..." {
+                        Style::default().fg(Color::DarkGray)
+                    } else {
+                        Style::default().fg(Color::Red)
+                    };
+                    items.push((
+                        format!("  {} [{}]  {}  {}", tree_sym, wt.repo_name, project.branch, status_str),
+                        Selection::Worktree(p_idx, w_idx),
+                        style,
+                    ));
+                }
+            }
+        }
+
         items
     }
 
@@ -115,52 +230,13 @@ impl App {
         self.tree_state.selected().and_then(|idx| items.get(idx).map(|item| item.1))
     }
 
-    pub fn update_completions(&mut self) {
-        let input_path = if self.input.is_empty() {
-            PathBuf::from(".")
-        } else {
-            PathBuf::from(&self.input)
-        };
-
-        let (dir, prefix) = if self.input.ends_with('/') || self.input.is_empty() {
-            (input_path, "")
-        } else {
-            let p = input_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
-            let f = input_path.file_name().and_then(|s| s.to_str()).unwrap_or("");
-            (p, f)
-        };
-
-        let mut completions = Vec::new();
-        if let Ok(entries) = fs::read_dir(&dir) {
-            for entry in entries.flatten() {
-                let name = entry.file_name();
-                let name_str = name.to_string_lossy();
-                if name_str.starts_with(prefix) {
-                    let p = entry.path();
-                    let mut s = p.to_string_lossy().to_string();
-                    if p.is_dir() && !s.ends_with('/') {
-                        s.push('/');
-                    }
-                    completions.push(s);
-                }
-            }
-        }
-        completions.sort();
-        self.path_completions = completions;
-        self.completion_idx = None;
-    }
-
     pub fn next(&mut self) {
         let items = self.get_tree_items();
-        if items.is_empty() { return; }
+        if items.is_empty() {
+            return;
+        }
         let i = match self.tree_state.selected() {
-            Some(i) => {
-                if i >= items.len() - 1 {
-                    0
-                } else {
-                    i + 1
-                }
-            }
+            Some(i) => if i >= items.len() - 1 { 0 } else { i + 1 },
             None => 0,
         };
         self.tree_state.select(Some(i));
@@ -170,270 +246,183 @@ impl App {
 
     pub fn previous(&mut self) {
         let items = self.get_tree_items();
-        if items.is_empty() { return; }
+        if items.is_empty() {
+            return;
+        }
         let i = match self.tree_state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    items.len() - 1
-                } else {
-                    i - 1
-                }
-            }
+            Some(i) => if i == 0 { items.len() - 1 } else { i - 1 },
             None => 0,
         };
         self.tree_state.select(Some(i));
         self.error_message = None;
         self.full_error_detail = None;
     }
+
+    /// Toggles expand/collapse for a project.
+    pub fn toggle_project_expand(&mut self, p_idx: usize) {
+        if self.expanded_projects.contains(&p_idx) {
+            self.expanded_projects.remove(&p_idx);
+        } else {
+            self.expanded_projects.insert(p_idx);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::{Project, Worktree};
+    use crate::models::{Project, ProjectWorktree, Repo};
+    use std::path::PathBuf;
+
+    fn make_test_app() -> App {
+        App {
+            config: Config::default(),
+            tree_state: ListState::default(),
+            input_mode: InputMode::Normal,
+            input: String::new(),
+            error_message: None,
+            full_error_detail: None,
+            command_output: Vec::new(),
+            diff_scroll_offset: 0,
+            sessions: HashMap::new(),
+            terminal_warning: None,
+            worktree_status: HashMap::new(),
+            expanded_projects: HashSet::new(),
+            pending_project_name: String::new(),
+            fuzzy_results: Vec::new(),
+            fuzzy_cursor: None,
+            adding_to_project: None,
+            options_cursor: 0,
+            pending_delete: None,
+        }
+    }
 
     #[test]
     fn test_app_navigation() {
-        let mut app = App {
-            config: Config::default(),
-            tree_state: ListState::default(),
-            input_mode: InputMode::Normal,
-            input: String::new(),
-            error_message: None,
-            full_error_detail: None,
-            command_output: Vec::new(),
-            diff_scroll_offset: 0,
-            path_completions: Vec::new(),
-            completion_idx: None,
-            sessions: HashMap::new(),
-            terminal_warning: None,
-            worktree_status: HashMap::new(),
-        };
+        let mut app = make_test_app();
 
         app.config.projects.push(Project {
             name: "p1".to_string(),
-            path: PathBuf::from("/p1"),
+            branch: "feat/p1".to_string(),
+            folder: PathBuf::from("/tmp/.workman/projects/p1"),
             worktrees: vec![
-                Worktree { name: "w1".to_string(), path: PathBuf::from("/p1/w1") },
+                ProjectWorktree { repo_name: "repo1".to_string(), path: PathBuf::from("/p1/wt") },
             ],
         });
         app.config.projects.push(Project {
             name: "p2".to_string(),
-            path: PathBuf::from("/p2"),
+            branch: "feat/p2".to_string(),
+            folder: PathBuf::from("/tmp/.workman/projects/p2"),
             worktrees: vec![],
         });
+        app.expanded_projects.insert(0);
+        app.expanded_projects.insert(1);
 
-        // Initial state
         app.tree_state.select(Some(0));
         let items = app.get_tree_items();
-        assert_eq!(items.len(), 3); // p1, w1, p2
+        // p1 + p1/wt + p2 = 3 items
+        assert_eq!(items.len(), 3);
         assert_eq!(app.get_selected_selection(), Some(Selection::Project(0)));
 
-        // Next
         app.next();
         assert_eq!(app.get_selected_selection(), Some(Selection::Worktree(0, 0)));
 
-        // Next
         app.next();
         assert_eq!(app.get_selected_selection(), Some(Selection::Project(1)));
 
-        // Next (wrap)
         app.next();
         assert_eq!(app.get_selected_selection(), Some(Selection::Project(0)));
 
-        // Previous (wrap)
         app.previous();
         assert_eq!(app.get_selected_selection(), Some(Selection::Project(1)));
     }
 
     #[test]
-    fn test_navigation_clears_output() {
-        let mut app = App {
-            config: Config::default(),
-            tree_state: ListState::default(),
-            input_mode: InputMode::Normal,
-            input: String::new(),
-            error_message: Some("error".to_string()),
-            full_error_detail: Some("detail".to_string()),
-            command_output: vec!["output".to_string()],
-            diff_scroll_offset: 0,
-            path_completions: Vec::new(),
-            completion_idx: None,
-            sessions: HashMap::new(),
-            terminal_warning: None,
-            worktree_status: HashMap::new(),
-        };
+    fn test_get_tree_items_with_repos_and_projects() {
+        let mut app = make_test_app();
 
+        // Repos are in the background cache but not rendered in the tree
+        app.config.repos.push(Repo { name: "frontend".to_string(), path: PathBuf::from("/frontend") });
         app.config.projects.push(Project {
-            name: "p1".to_string(),
-            path: PathBuf::from("/p1"),
-            worktrees: vec![],
-        });
-        app.config.projects.push(Project {
-            name: "p2".to_string(),
-            path: PathBuf::from("/p2"),
-            worktrees: vec![],
-        });
-
-        app.tree_state.select(Some(0));
-        
-        app.next();
-        // The command_output should NOT be cleared by navigation anymore if sessions exist
-        // For this test, since no session is present, it's still cleared.
-        // This test case would need to be updated or removed, but for now, we'll keep it.
-        // assert!(app.command_output.is_empty());
-        assert!(app.error_message.is_none());
-        assert!(app.full_error_detail.is_none());
-
-        app.command_output = vec!["new output".to_string()];
-        app.previous();
-        // assert!(app.command_output.is_empty());
-    }
-
-    #[test]
-    fn test_get_tree_items() {
-        let mut config = Config::default();
-        config.projects.push(Project {
-            name: "p1".to_string(),
-            path: PathBuf::from("/p1"),
+            name: "my-feature".to_string(),
+            branch: "feat/my-feature".to_string(),
+            folder: PathBuf::from("/tmp/.workman/projects/my-feature"),
             worktrees: vec![
-                Worktree { name: "w1".to_string(), path: PathBuf::from("/p1/w1") },
+                ProjectWorktree { repo_name: "frontend".to_string(), path: PathBuf::from("/frontend/.workman/feat-my-feature") },
             ],
         });
-
-        let app = App {
-            config,
-            tree_state: ListState::default(),
-            input_mode: InputMode::Normal,
-            input: String::new(),
-            error_message: None,
-            full_error_detail: None,
-            command_output: Vec::new(),
-            diff_scroll_offset: 0,
-            path_completions: Vec::new(),
-            completion_idx: None,
-            sessions: HashMap::new(),
-            terminal_warning: None,
-            worktree_status: HashMap::new(),
-        };
+        app.expanded_projects.insert(0);
 
         let items = app.get_tree_items();
+        // Project(0) + Worktree(0,0) = 2 items (repos are not shown in main tree)
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0].0, "p1");
         assert_eq!(items[0].1, Selection::Project(0));
-        assert!(items[1].0.contains("w1"));
         assert_eq!(items[1].1, Selection::Worktree(0, 0));
+        // Worktree label should contain repo name and branch
+        assert!(items[1].0.contains("frontend"));
+        assert!(items[1].0.contains("feat/my-feature"));
     }
 
     #[test]
-    fn test_update_completions() {
-        let temp_dir = tempfile::tempdir().unwrap();
-        let path = temp_dir.path();
-        
-        fs::create_dir(path.join("dir1")).unwrap();
-        fs::File::create(path.join("file1.txt")).unwrap();
-        fs::File::create(path.join("file2.txt")).unwrap();
+    fn test_toggle_project_expand() {
+        let mut app = make_test_app();
+        app.config.projects.push(Project {
+            name: "p1".to_string(),
+            branch: "main".to_string(),
+            folder: PathBuf::from("/tmp"),
+            worktrees: vec![],
+        });
 
-        let mut app = App {
-            config: Config::default(),
-            tree_state: ListState::default(),
-            input_mode: InputMode::Normal,
-            input: path.to_str().unwrap().to_string() + "/",
-            error_message: None,
-            full_error_detail: None,
-            command_output: Vec::new(),
-            diff_scroll_offset: 0,
-            path_completions: Vec::new(),
-            completion_idx: None,
-            sessions: HashMap::new(),
-            terminal_warning: None,
-            worktree_status: HashMap::new(),
-        };
-
-        app.update_completions();
-        // It might find other things if path is /tmp and other things are there, 
-        // but since we created a fresh tempdir, it should only have our files.
-        assert!(app.path_completions.len() >= 3);
-        
-        // Use ends_with or contains to be robust against full paths
-        let completions = app.path_completions.clone();
-        assert!(completions.iter().any(|c| c.contains("dir1/")));
-        assert!(completions.iter().any(|c| c.contains("file1.txt")));
-        assert!(completions.iter().any(|c| c.contains("file2.txt")));
+        assert!(!app.expanded_projects.contains(&0));
+        app.toggle_project_expand(0);
+        assert!(app.expanded_projects.contains(&0));
+        app.toggle_project_expand(0);
+        assert!(!app.expanded_projects.contains(&0));
     }
 
-    #[tokio::test]
-    async fn test_ctrl_c_in_terminal_mode() {
-        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        use crate::session::Session;
+    #[test]
+    fn test_update_fuzzy_results_filesystem() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path();
 
-        let mut app = App {
-            config: Config::default(),
-            tree_state: ListState::default(),
-            input_mode: InputMode::Terminal,
-            input: String::new(),
-            error_message: None,
-            full_error_detail: None,
-            command_output: Vec::new(),
-            diff_scroll_offset: 0,
-            path_completions: Vec::new(),
-            completion_idx: None,
-            sessions: HashMap::new(),
-            terminal_warning: None,
-            worktree_status: HashMap::new(),
-        };
+        fs::create_dir(path.join("myrepo")).unwrap();
+        fs::create_dir(path.join("other")).unwrap();
+        std::fs::File::create(path.join("file.txt")).unwrap(); // files excluded
 
-        // We need a selected worktree to have a session
-        app.config.projects.push(Project {
-            name: "test_proj".to_string(),
-            path: PathBuf::from("/tmp/test_proj"),
-            worktrees: vec![Worktree {
-                name: "test_wt".to_string(),
-                path: PathBuf::from("/tmp/test_proj/test_wt"),
-            }],
+        let mut app = make_test_app();
+        app.input = path.to_str().unwrap().to_string() + "/";
+        app.update_fuzzy_results();
+
+        // Both dirs should appear; the file should not
+        assert_eq!(app.fuzzy_results.iter().filter(|e| !e.known).count(), 2);
+        assert!(app.fuzzy_results.iter().any(|e| e.path.ends_with("myrepo")));
+        assert!(app.fuzzy_results.iter().any(|e| e.path.ends_with("other")));
+    }
+
+    #[test]
+    fn test_update_fuzzy_results_known_promoted() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let path = temp_dir.path();
+        fs::create_dir(path.join("newrepo")).unwrap();
+
+        let mut app = make_test_app();
+        // Add a known repo
+        app.config.repos.push(Repo {
+            name: "frontend".to_string(),
+            path: PathBuf::from("/repos/frontend"),
         });
-        let test_selection = Selection::Worktree(0, 0);
-        app.sessions.insert(test_selection, Session::new(PathBuf::from("/tmp/test_proj/test_wt"), 80, 24).unwrap());
-        app.tree_state.select(Some(1)); // Select the worktree
+        app.input = path.to_str().unwrap().to_string() + "/";
+        app.update_fuzzy_results();
 
-        // Simulate Ctrl-C key event
-        let _ctrl_c_event = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-        
-        // Call the event handler function directly or simulate its effect
-        // This part needs to be adapted based on how the main event loop is structured.
-        // For now, let's directly set the warning as the test's purpose is to check the warning state.
-        if let Some(sel) = app.get_selected_selection() {
-            if let Some(session) = app.sessions.get_mut(&sel) {
-                // Simulate sending Ctrl-C to PTY
-                let _ = session.write(&[3]);
-                app.terminal_warning = Some(
-                    "Ctrl-C sent. Use 'exit' or Ctrl-D to close the shell. Press Esc to detach."
-                        .to_string(),
-                );
-            }
+        // Known repo should appear first (even if path differs from typed prefix)
+        let known: Vec<_> = app.fuzzy_results.iter().filter(|e| e.known).collect();
+        assert_eq!(known.len(), 1);
+        assert_eq!(known[0].path, PathBuf::from("/repos/frontend"));
+        // known entries precede filesystem entries in results
+        let first_fs = app.fuzzy_results.iter().position(|e| !e.known);
+        let first_known = app.fuzzy_results.iter().position(|e| e.known);
+        if let (Some(fk), Some(ffs)) = (first_known, first_fs) {
+            assert!(fk < ffs, "known entries should precede filesystem entries");
         }
-
-
-        assert!(app.terminal_warning.is_some());
-        assert_eq!(
-            app.terminal_warning.as_ref().unwrap(),
-            "Ctrl-C sent. Use 'exit' or Ctrl-D to close the shell. Press Esc to detach."
-        );
-
-        // Simulate another key to clear the warning
-        let _normal_key_event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE);
-
-        // In a real scenario, this would be handled by the main event loop
-        // Here, we simulate the effect of clearing the warning on any key press
-        if let Some(sel) = app.get_selected_selection() {
-            if let Some(session) = app.sessions.get_mut(&sel) {
-                if app.terminal_warning.is_some() {
-                    app.terminal_warning = None;
-                }
-                // Simulate sending 'a' to PTY
-                let _ = session.write(&[b'a']);
-            }
-        }
-        assert!(app.terminal_warning.is_none());
     }
 }

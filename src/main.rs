@@ -2,6 +2,7 @@ mod app;
 mod event_handler;
 mod models;
 mod session;
+mod shortcuts;
 mod terminal_handler;
 mod ui;
 
@@ -32,7 +33,7 @@ impl Drop for TerminalRestorer {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let term_restorer = TerminalRestorer;
+    let _term_restorer = TerminalRestorer;
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -41,9 +42,11 @@ async fn main() -> Result<()> {
 
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
-    
-    // Handle SIGTERM
-    let mut signals = signal_hook::iterator::Signals::new(&[signal_hook::consts::SIGTERM, signal_hook::consts::SIGINT])?;
+
+    let mut signals = signal_hook::iterator::Signals::new(&[
+        signal_hook::consts::SIGTERM,
+        signal_hook::consts::SIGINT,
+    ])?;
     std::thread::spawn(move || {
         for _ in signals.forever() {
             r.store(false, Ordering::SeqCst);
@@ -54,8 +57,6 @@ async fn main() -> Result<()> {
     let app = App::new();
     let res = run_app(&mut terminal, app, running).await;
 
-    drop(term_restorer);
-
     if let Err(err) = res {
         println!("{:?}", err)
     }
@@ -63,30 +64,47 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-async fn run_app<B: Backend + io::Write>(terminal: &mut Terminal<B>, mut app: App, running: Arc<AtomicBool>) -> Result<()> {
+async fn run_app<B: Backend + io::Write>(
+    terminal: &mut Terminal<B>,
+    mut app: App,
+    running: Arc<AtomicBool>,
+) -> Result<()> {
     while running.load(Ordering::SeqCst) {
         let terminal_area = terminal.get_frame().area();
         let current_width = terminal_area.width;
         let current_height = terminal_area.height;
 
-        // Resize active session if terminal size changed
+        // Resize active PTY session if terminal dimensions changed
         if let Some(sel) = app.get_selected_selection() {
             if let Some(session) = app.sessions.get_mut(&sel) {
-                // Check if current terminal dimensions are different from session
-                // This is a placeholder, a better way would be to query actual PTY size or store it
                 let _ = session.resize(current_width, current_height);
             }
         }
-
 
         terminal.draw(|f| ui(f, &mut app)).map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
         if event::poll(std::time::Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press { // Only process key press events
+                if key.kind == KeyEventKind::Press {
                     match event_handler::handle_key_event(key, &mut app, current_width, current_height).await? {
                         event_handler::AppState::Quit => return Ok(()),
-                        event_handler::AppState::Continue => {},
+                        event_handler::AppState::Continue => {}
+                        event_handler::AppState::TmuxSession { path, session_name } => {
+                            // Suspend workman: restore normal terminal mode
+                            disable_raw_mode()?;
+                            execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+
+                            // Hand off to tmux (-A: attach if exists, else create)
+                            let _ = std::process::Command::new("tmux")
+                                .args(["new-session", "-A", "-s", &session_name, "-c"])
+                                .arg(&path)
+                                .status();
+
+                            // Resume workman
+                            enable_raw_mode()?;
+                            execute!(terminal.backend_mut(), EnterAlternateScreen)?;
+                            let _ = terminal.clear();
+                        }
                     }
                 }
             }
