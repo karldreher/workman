@@ -12,6 +12,8 @@ import HelpModal from "./components/HelpModal";
 import OptionsModal from "./components/OptionsModal";
 import { useWorktreeStatus } from "./hooks/useWorktreeStatus";
 
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+
 type Panel = "none" | "terminal" | "output" | "diff";
 
 type Modal =
@@ -46,6 +48,10 @@ function buildTreeItems(config: Config, expanded: Set<string>): TreeItem[] {
   return items;
 }
 
+function KbdHint({ k }: { k: string }) {
+  return <span className="kbd-hint">{isMac ? `⌥${k}` : `Alt+${k}`}</span>;
+}
+
 export default function App() {
   const [config, setConfig] = useState<Config | null>(null);
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
@@ -57,6 +63,7 @@ export default function App() {
   const [diffContent, setDiffContent] = useState("");
   const [modal, setModal] = useState<Modal>({ type: "none" });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [altHeld, setAltHeld] = useState(false);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const { statuses, refresh: refreshStatuses } = useWorktreeStatus();
 
@@ -66,6 +73,20 @@ export default function App() {
       setExpandedProjects(new Set(cfg.projects.map((p) => p.name)));
       if (cfg.projects.length > 0) setSelectedProject(cfg.projects[0].name);
     });
+  }, []);
+
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => { if (e.key === "Alt") setAltHeld(true); };
+    const up = (e: KeyboardEvent) => { if (e.key === "Alt") setAltHeld(false); };
+    const blur = () => setAltHeld(false);
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", blur);
+    };
   }, []);
 
   const currentProject = config?.projects.find((p) => p.name === selectedProject) ?? null;
@@ -106,46 +127,70 @@ export default function App() {
     });
   }, []);
 
-  const openTerminal = useCallback(() => {
-    if (!config) return;
-    const path = currentWorktree?.path ?? currentProject?.folder ?? null;
-    if (!path) return;
-    if (config.settings.use_tmux) {
-      api.openExternalTerminal(path).catch((e) => setErrorMessage(String(e)));
-      return;
-    }
-    const sessionId = currentWorktree
-      ? `${selectedProject}/${selectedRepo}`
-      : selectedProject!;
-    setTerminalSession({ id: sessionId, path });
-    setActivePanel("terminal");
-  }, [config, currentProject, currentWorktree, selectedProject, selectedRepo]);
+  const openTerminalFor = useCallback(
+    (projectName: string, repoName?: string) => {
+      if (!config) return;
+      const project = config.projects.find((p) => p.name === projectName);
+      const wt = repoName ? project?.worktrees.find((w) => w.repo_name === repoName) : null;
+      const path = wt?.path ?? project?.folder ?? null;
+      if (!path) return;
+      setSelectedProject(projectName);
+      setSelectedRepo(repoName ?? null);
+      if (config.settings.use_tmux) {
+        api.openExternalTerminal(path).catch((e) => setErrorMessage(String(e)));
+        return;
+      }
+      const sessionId = repoName ? `${projectName}/${repoName}` : projectName;
+      setTerminalSession({ id: sessionId, path });
+      setActivePanel("terminal");
+    },
+    [config],
+  );
 
-  const openDiff = useCallback(async () => {
-    if (!selectedProject || !selectedRepo) {
-      setErrorMessage("Select a worktree first.");
-      return;
-    }
+  const pushFor = useCallback((projectName: string, repoName?: string) => {
+    setSelectedProject(projectName);
+    setSelectedRepo(repoName ?? null);
+    setModal({ type: "commit", scope: repoName ? "repo" : "project" });
+  }, []);
+
+  const diffFor = useCallback(async (projectName: string, repoName: string) => {
+    setSelectedProject(projectName);
+    setSelectedRepo(repoName);
     try {
-      const diff = await api.getDiff(selectedProject, selectedRepo);
+      const diff = await api.getDiff(projectName, repoName);
       setDiffContent(diff || "(no changes)");
       setActivePanel("diff");
       setErrorMessage(null);
     } catch (e) {
       setErrorMessage(String(e));
     }
-  }, [selectedProject, selectedRepo]);
+  }, []);
+
+  const deleteFor = useCallback((projectName: string, repoName?: string) => {
+    setSelectedProject(projectName);
+    setSelectedRepo(repoName ?? null);
+    if (repoName) {
+      setModal({ type: "confirmRepo", projectName, repoName });
+    } else {
+      setModal({ type: "confirmProject", name: projectName });
+    }
+  }, []);
+
+  const addRepoFor = useCallback((projectName: string) => {
+    setSelectedProject(projectName);
+    setModal({ type: "addRepo" });
+  }, []);
 
   const handlePush = useCallback(
     async (commitMessage?: string) => {
       setModal({ type: "none" });
       try {
-        if (currentWorktree && selectedProject && selectedRepo) {
+        if (selectedRepo && selectedProject) {
           const result = await api.pushWorktree(selectedProject, selectedRepo, commitMessage);
           setOutputLines(result.output.split("\n").filter(Boolean));
           if (result.success) { setErrorMessage(null); refreshStatuses(); }
           else setErrorMessage("Push failed — see output");
-        } else if (currentProject && selectedProject) {
+        } else if (selectedProject) {
           const results = await api.pushProject(selectedProject, commitMessage);
           setOutputLines(results.map((r) => `${r.success ? "✓" : "✗"} [${r.repo_name}]  ${r.detail}`));
           const allOk = results.every((r) => r.success);
@@ -157,21 +202,18 @@ export default function App() {
         setErrorMessage(String(e));
       }
     },
-    [currentProject, currentWorktree, selectedProject, selectedRepo, refreshStatuses],
+    [selectedProject, selectedRepo, refreshStatuses],
   );
 
-  const handleSaveSettings = useCallback(
-    async (settings: Settings) => {
-      try {
-        const updated = await api.updateSettings(settings);
-        setConfig(updated);
-        setModal({ type: "none" });
-      } catch (e) {
-        setErrorMessage(String(e));
-      }
-    },
-    [],
-  );
+  const handleSaveSettings = useCallback(async (settings: Settings) => {
+    try {
+      const updated = await api.updateSettings(settings);
+      setConfig(updated);
+      setModal({ type: "none" });
+    } catch (e) {
+      setErrorMessage(String(e));
+    }
+  }, []);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -190,47 +232,54 @@ export default function App() {
         case "Enter":
           if (!selectedRepo && selectedProject) toggleExpand(selectedProject);
           break;
-        case "n":
-          setModal({ type: "addProject" });
-          break;
-        case "a":
-          if (selectedProject) setModal({ type: "addRepo" });
-          else setErrorMessage("Select a project first.");
-          break;
-        case "t":
-          openTerminal();
-          break;
-        case "p":
-          if (!selectedProject) { setErrorMessage("Select a project first."); break; }
-          setModal({ type: "commit", scope: selectedRepo ? "repo" : "project" });
-          break;
-        case "d":
-          openDiff();
-          break;
-        case "x":
-          if (selectedRepo && selectedProject)
-            setModal({ type: "confirmRepo", projectName: selectedProject, repoName: selectedRepo });
-          else if (selectedProject)
-            setModal({ type: "confirmProject", name: selectedProject });
-          break;
-        case "o":
-          setModal({ type: "options" });
-          break;
-        case "h":
-          setModal({ type: "help" });
-          break;
-        case "q":
-          import("@tauri-apps/api/window").then(({ getCurrentWindow }) =>
-            getCurrentWindow().close(),
-          );
-          break;
         case "Escape":
           if (activePanel !== "none") setActivePanel("none");
           setErrorMessage(null);
           break;
+        case "n":
+          if (!e.altKey) break;
+          setModal({ type: "addProject" });
+          break;
+        case "a":
+          if (!e.altKey) break;
+          if (selectedProject) setModal({ type: "addRepo" });
+          else setErrorMessage("Select a project first.");
+          break;
+        case "t":
+          if (!e.altKey) break;
+          if (selectedProject) openTerminalFor(selectedProject, selectedRepo ?? undefined);
+          break;
+        case "p":
+          if (!e.altKey) break;
+          if (!selectedProject) { setErrorMessage("Select a project first."); break; }
+          pushFor(selectedProject, selectedRepo ?? undefined);
+          break;
+        case "d":
+          if (!e.altKey) break;
+          if (selectedProject && selectedRepo) diffFor(selectedProject, selectedRepo);
+          else setErrorMessage("Select a worktree first.");
+          break;
+        case "x":
+          if (!e.altKey) break;
+          if (selectedProject) deleteFor(selectedProject, selectedRepo ?? undefined);
+          break;
+        case "o":
+          if (!e.altKey) break;
+          setModal({ type: "options" });
+          break;
+        case "h":
+          if (!e.altKey) break;
+          setModal({ type: "help" });
+          break;
+        case "q":
+          if (!e.altKey) break;
+          import("@tauri-apps/api/window").then(({ getCurrentWindow }) =>
+            getCurrentWindow().close(),
+          );
+          break;
       }
     },
-    [modal, selectedProject, selectedRepo, activePanel, navigateNext, navigatePrev, toggleExpand, openTerminal, openDiff],
+    [modal, selectedProject, selectedRepo, activePanel, navigateNext, navigatePrev, toggleExpand, openTerminalFor, pushFor, diffFor, deleteFor],
   );
 
   useEffect(() => {
@@ -246,7 +295,18 @@ export default function App() {
     <div className="app">
       <header className="app-header">
         <span className="app-title">workman</span>
-        {errorMessage && <span className="app-error">{errorMessage}</span>}
+        {errorMessage
+          ? <span className="app-error">{errorMessage}</span>
+          : <span className="header-spacer" />
+        }
+        <div className="header-toolbar">
+          <button className="toolbar-btn" onClick={() => setModal({ type: "options" })} title="Options (Alt+O)">
+            options{altHeld && <KbdHint k="O" />}
+          </button>
+          <button className="toolbar-btn" onClick={() => setModal({ type: "help" })} title="Help (Alt+H)">
+            help{altHeld && <KbdHint k="H" />}
+          </button>
+        </div>
       </header>
 
       <div className="app-body">
@@ -257,9 +317,17 @@ export default function App() {
             selectedProject={selectedProject}
             selectedRepo={selectedRepo}
             expandedProjects={expandedProjects}
+            altHeld={altHeld}
+            isMac={isMac}
             onSelectProject={(name) => { setSelectedProject(name); setSelectedRepo(null); setErrorMessage(null); }}
             onSelectRepo={(project, repo) => { setSelectedProject(project); setSelectedRepo(repo); setErrorMessage(null); }}
             onToggleExpand={toggleExpand}
+            onNewProject={() => setModal({ type: "addProject" })}
+            onAddRepo={addRepoFor}
+            onTerminal={openTerminalFor}
+            onPush={pushFor}
+            onDiff={diffFor}
+            onDelete={deleteFor}
           />
         </div>
 
@@ -282,30 +350,59 @@ export default function App() {
             />
           )}
           {activePanel === "none" && (
-            <div className="panel-empty">
-              <span className="panel-hint">
-                {currentWorktree
-                  ? `${currentWorktree.repo_name} — ${currentProject?.branch}`
-                  : currentProject
-                  ? `${currentProject.name}  (${currentProject.branch})`
-                  : "Press n to create a project"}
-              </span>
+            <div className="action-panel">
+              {currentWorktree ? (
+                <>
+                  <div className="action-panel-info">
+                    <div className="action-panel-name">{currentWorktree.repo_name}</div>
+                    <div className="action-panel-branch">{currentProject?.branch}</div>
+                    <div className="action-panel-sub">{currentProject?.name}</div>
+                  </div>
+                  <div className="action-panel-grid">
+                    <button className="panel-action-btn" onClick={() => openTerminalFor(selectedProject!, selectedRepo!)}>
+                      &gt;_ terminal{altHeld && <KbdHint k="T" />}
+                    </button>
+                    <button className="panel-action-btn" onClick={() => diffFor(selectedProject!, selectedRepo!)}>
+                      ≠ diff{altHeld && <KbdHint k="D" />}
+                    </button>
+                    <button className="panel-action-btn" onClick={() => pushFor(selectedProject!, selectedRepo!)}>
+                      ↑ push{altHeld && <KbdHint k="P" />}
+                    </button>
+                    <button className="panel-action-btn danger" onClick={() => deleteFor(selectedProject!, selectedRepo!)}>
+                      × remove{altHeld && <KbdHint k="X" />}
+                    </button>
+                  </div>
+                </>
+              ) : currentProject ? (
+                <>
+                  <div className="action-panel-info">
+                    <div className="action-panel-name">{currentProject.name}</div>
+                    <div className="action-panel-branch">{currentProject.branch}</div>
+                  </div>
+                  <div className="action-panel-grid">
+                    <button className="panel-action-btn" onClick={() => openTerminalFor(selectedProject!)}>
+                      &gt;_ terminal{altHeld && <KbdHint k="T" />}
+                    </button>
+                    <button className="panel-action-btn" onClick={() => pushFor(selectedProject!)}>
+                      ↑ push{altHeld && <KbdHint k="P" />}
+                    </button>
+                    <button className="panel-action-btn" onClick={() => addRepoFor(selectedProject!)}>
+                      + add repo{altHeld && <KbdHint k="A" />}
+                    </button>
+                    <button className="panel-action-btn danger" onClick={() => deleteFor(selectedProject!)}>
+                      × delete{altHeld && <KbdHint k="X" />}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <div className="panel-empty">
+                  <span className="panel-hint">Select or create a project</span>
+                </div>
+              )}
             </div>
           )}
         </div>
       </div>
-
-      <footer className="app-footer">
-        <span>[n] new</span>
-        <span>[a] add repo</span>
-        <span>[t] terminal</span>
-        <span>[p] push</span>
-        <span>[d] diff</span>
-        <span>[x] delete</span>
-        <span>[o] options</span>
-        <span>[h] help</span>
-        <span>[q] quit</span>
-      </footer>
 
       {modal.type === "addProject" && (
         <AddProjectModal

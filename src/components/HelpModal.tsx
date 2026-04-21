@@ -1,22 +1,26 @@
 import { useEffect } from "react";
 
+const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+const mod = isMac ? "⌥" : "Alt+";
+
+const shortcuts = [
+  [`${mod}N`, "new project"],
+  [`${mod}A`, "add repo to project"],
+  [`${mod}T`, "open terminal"],
+  [`${mod}P`, "push (worktree or project)"],
+  [`${mod}D`, "show diff"],
+  [`${mod}X`, "delete project or worktree"],
+  [`${mod}O`, "options"],
+  [`${mod}H`, "help"],
+  [`${mod}Q`, "quit"],
+  ["↑ / ↓", "navigate tree"],
+  ["Enter", "expand / collapse project"],
+  ["Esc", "close panel / dismiss error"],
+];
+
 interface Props {
   onClose: () => void;
 }
-
-const shortcuts = [
-  ["n", "new project"],
-  ["a", "add repo to project"],
-  ["t", "open terminal (or external if use_tmux)"],
-  ["p", "push (worktree or project)"],
-  ["d", "show diff (worktree)"],
-  ["x", "delete project or worktree"],
-  ["o", "options"],
-  ["↑ / ↓", "navigate"],
-  ["Enter", "expand / collapse project"],
-  ["Esc", "close panel / dismiss error"],
-  ["q", "quit"],
-];
 
 export default function HelpModal({ onClose }: Props) {
   useEffect(() => {
