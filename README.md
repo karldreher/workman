@@ -10,17 +10,18 @@ A Git worktree manager for staying focused in large repositories.
 | :--- | :--- |
 | **Repo** | A git repository registered in the global pool. |
 | **Project** | A named grouping of worktrees, all on the same branch (e.g. `feat/my-feature`). |
-| **Worktree** | A checked-out branch inside a repo, under `<repo>/.workman/<branch>/`. |
+| **Worktree** | A checked-out branch for one repo inside a project, at `~/.workman/projects/<project>/<repo>/`. |
 
 ### Project folder
 
-Each Project gets a folder at `~/.workman/projects/<name>/` with symlinks to its worktrees:
+Each Project gets a folder at `~/.workman/projects/<name>/`. Worktrees are checked out **directly** inside it — no symlinks, works the same on Windows, Linux, and macOS:
 
 ```
 ~/.workman/projects/my-feature/
-├── frontend -> /path/to/frontend/.workman/feat-my-feature/
-├── backend  -> /path/to/backend/.workman/feat-my-feature/
-└── infra    -> /path/to/infra/.workman/feat-my-feature/
+├── frontend/              ← git worktree on feat/my-feature
+├── backend/               ← git worktree on feat/my-feature
+├── infra/                 ← git worktree on feat/my-feature
+└── my-feature.code-workspace
 ```
 
 ## Installation

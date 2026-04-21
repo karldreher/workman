@@ -54,17 +54,16 @@ export default function AddProjectModal({ onConfirm, onCancel }: Props) {
             <span>
               When you add a repo, workman creates the{" "}
               <code className="modal-info-code">{displayBranch}</code> branch (if it doesn't
-              exist yet) and checks it out as a git worktree inside{" "}
-              <code className="modal-info-code">&lt;repo&gt;/.workman/</code>.
+              exist yet) and checks it out as a git worktree.
             </span>
           </div>
           <div className="modal-info-row">
             <span className="modal-info-icon">⛓</span>
             <span>
-              A project folder at{" "}
-              <code className="modal-info-code">~/.workman/projects/{displayName}/</code>{" "}
-              is created with symlinks to every worktree, so you can open the whole project
-              in one place — including as a VS Code workspace.
+              All worktrees live directly at{" "}
+              <code className="modal-info-code">~/.workman/projects/{displayName}/&lt;repo&gt;/</code>
+              — one central place, no scattered directories inside your repos. Open the
+              whole project as a VS Code workspace in one click.
             </span>
           </div>
         </div>

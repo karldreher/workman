@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use tauri::State;
 
-use crate::models::{Config, ProjectWorktree, Repo};
+use crate::models::{Config, Project, ProjectWorktree, Repo};
 use crate::state::WorkmanState;
 
 #[tauri::command]
@@ -41,7 +41,11 @@ pub fn add_repo_to_project(
     };
 
     let branch = state.config.projects[p_idx].branch.clone();
-    let (out, wt_path) = repo.add_worktree(&branch).map_err(|e| e.to_string())?;
+    let dest = Project::make_folder_path(&project_name).join(&name);
+    fs::create_dir_all(dest.parent().unwrap())
+        .map_err(|e| format!("Cannot create project folder: {}", e))?;
+
+    let (out, wt_path) = repo.add_worktree(&branch, dest).map_err(|e| e.to_string())?;
 
     if !out.status.success() {
         state.config.save().ok();
@@ -49,7 +53,6 @@ pub fn add_repo_to_project(
     }
 
     let wt = ProjectWorktree { repo_name: repo.name.clone(), path: wt_path };
-    let _ = state.config.projects[p_idx].add_symlink(&wt);
     state.config.projects[p_idx].worktrees.push(wt);
     state.config.save().map_err(|e| e.to_string())?;
     Ok(state.config.clone())
@@ -68,7 +71,6 @@ pub fn remove_worktree(
         .ok_or_else(|| format!("Repo '{}' not in project.", repo_name))?;
 
     let wt = state.config.projects[p_idx].worktrees[w_idx].clone();
-    let project_folder = state.config.projects[p_idx].folder.clone();
 
     let git_result = state.config.repos.iter()
         .find(|r| r.name == wt.repo_name)
@@ -82,7 +84,6 @@ pub fn remove_worktree(
         _ => {}
     }
 
-    let _ = std::fs::remove_file(project_folder.join(&wt.repo_name));
     state.sessions.remove(&format!("{}/{}", project_name, repo_name));
     state.config.projects[p_idx].worktrees.remove(w_idx);
     state.config.save().map_err(|e| e.to_string())?;

@@ -10,33 +10,10 @@ pub struct Repo {
 }
 
 impl Repo {
-    /// Sanitizes a branch name for use as a filesystem directory name.
-    pub fn sanitize_branch(branch: &str) -> String {
-        branch.replace('/', "-")
-    }
-
-    /// Creates a git worktree for this repo on the given branch.
-    /// Returns the git command output and the worktree path.
-    pub fn add_worktree(&self, branch: &str) -> Result<(std::process::Output, PathBuf)> {
-        let workman_dir = self.path.join(".workman");
-        if !workman_dir.exists() {
-            fs::create_dir_all(&workman_dir)?;
-        }
-
-        let gitignore_path = self.path.join(".gitignore");
-        let mut needs_append = true;
-        if let Ok(content) = fs::read_to_string(&gitignore_path) {
-            if content.lines().any(|l| l.trim() == ".workman/" || l.trim() == ".workman") {
-                needs_append = false;
-            }
-        }
-        if needs_append {
-            use std::io::Write;
-            if let Ok(mut file) = fs::OpenOptions::new().append(true).create(true).open(&gitignore_path) {
-                let _ = writeln!(file, "\n# workman worktrees\n.workman/");
-            }
-        }
-
+    /// Creates a git worktree for this repo on the given branch at the given destination.
+    /// The caller is responsible for creating the parent directory of `dest`.
+    /// Returns the git command output and the destination path.
+    pub fn add_worktree(&self, branch: &str, dest: PathBuf) -> Result<(std::process::Output, PathBuf)> {
         let valid_format = std::process::Command::new("git")
             .arg("-C").arg(&self.path)
             .arg("check-ref-format").arg("--normalize")
@@ -55,19 +32,16 @@ impl Repo {
             .map(|o| o.status.success())
             .unwrap_or(false);
 
-        let wt_dir_name = Self::sanitize_branch(branch);
-        let wt_path = workman_dir.join(&wt_dir_name);
-
         let mut cmd = std::process::Command::new("git");
         cmd.arg("-C").arg(&self.path).arg("worktree").arg("add");
         if !branch_exists {
-            cmd.arg("-b").arg(branch).arg(&wt_path);
+            cmd.arg("-b").arg(branch).arg(&dest);
         } else {
-            cmd.arg(&wt_path).arg(branch);
+            cmd.arg(&dest).arg(branch);
         }
 
         let output = cmd.output().map_err(|e| anyhow::anyhow!(e))?;
-        Ok((output, wt_path))
+        Ok((output, dest))
     }
 
     /// Removes a worktree from this repo by path.
@@ -194,28 +168,13 @@ impl Project {
             .join(project_name)
     }
 
-    /// Creates the project folder and symlinks to each worktree.
+    /// Creates the project folder.
     pub fn create_folder(&self) -> Result<()> {
         fs::create_dir_all(&self.folder)?;
-        for wt in &self.worktrees {
-            let _ = self.add_symlink(wt);
-        }
         Ok(())
     }
 
-    /// Adds a symlink inside the project folder pointing to a worktree.
-    pub fn add_symlink(&self, wt: &ProjectWorktree) -> Result<()> {
-        #[cfg(unix)]
-        {
-            let link_path = self.folder.join(&wt.repo_name);
-            if !link_path.exists() {
-                std::os::unix::fs::symlink(&wt.path, &link_path)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Removes the project folder and all its symlinks.
+    /// Removes the project folder and all worktree checkouts inside it.
     pub fn remove_folder(&self) -> Result<()> {
         if self.folder.exists() {
             fs::remove_dir_all(&self.folder)?;
@@ -344,7 +303,7 @@ mod tests {
             folder: PathBuf::from("/tmp/.workman/projects/my-feature"),
             worktrees: vec![ProjectWorktree {
                 repo_name: "myrepo".to_string(),
-                path: PathBuf::from("/tmp/myrepo/.workman/feat-my-feature"),
+                path: PathBuf::from("/tmp/.workman/projects/my-feature/myrepo"),
             }],
         });
 
@@ -356,13 +315,6 @@ mod tests {
         assert_eq!(decoded.projects[0].branch, "feat/my-feature");
         assert_eq!(decoded.projects[0].worktrees.len(), 1);
         assert_eq!(decoded.projects[0].worktrees[0].repo_name, "myrepo");
-    }
-
-    #[test]
-    fn test_sanitize_branch() {
-        assert_eq!(Repo::sanitize_branch("feat/my-feature"), "feat-my-feature");
-        assert_eq!(Repo::sanitize_branch("main"), "main");
-        assert_eq!(Repo::sanitize_branch("fix/bug/nested"), "fix-bug-nested");
     }
 
     #[test]
