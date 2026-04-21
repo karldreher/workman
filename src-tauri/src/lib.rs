@@ -36,6 +36,7 @@ pub fn run() {
             commands::pty::write_to_pty,
             commands::pty::resize_pty,
             commands::pty::open_external_terminal,
+            commands::vscode::open_in_vscode,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application")

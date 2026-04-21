@@ -17,6 +17,7 @@ interface Props {
   onPush: (projectName: string, repoName?: string) => void;
   onDiff: (projectName: string, repoName: string) => void;
   onDelete: (projectName: string, repoName?: string) => void;
+  onContextMenu: (e: React.MouseEvent, projectName: string, repoName?: string) => void;
 }
 
 function statusClass(status: string | undefined): string {
@@ -48,6 +49,7 @@ export default function ProjectTree({
   onPush,
   onDiff,
   onDelete,
+  onContextMenu,
 }: Props) {
   return (
     <>
@@ -78,10 +80,8 @@ export default function ProjectTree({
               <div key={project.name}>
                 <div
                   className={`tree-item tree-item-project${isProjectSelected ? " selected" : ""}`}
-                  onClick={() => {
-                    onSelectProject(project.name);
-                    onToggleExpand(project.name);
-                  }}
+                  onClick={() => { onSelectProject(project.name); onToggleExpand(project.name); }}
+                  onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, project.name); }}
                 >
                   <span className="tree-prefix">{expanded ? "▼" : "▶"}</span>
                   <span className="tree-name">{project.name}</span>
@@ -131,6 +131,7 @@ export default function ProjectTree({
                         key={wt.repo_name}
                         className={`tree-item tree-item-worktree${isSelected ? " selected" : ""}`}
                         onClick={() => onSelectRepo(project.name, wt.repo_name)}
+                        onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, project.name, wt.repo_name); }}
                       >
                         <span className="tree-prefix">{isLast ? "└─" : "├─"}</span>
                         <span className="tree-repo-name">{wt.repo_name}</span>

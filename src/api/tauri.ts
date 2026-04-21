@@ -54,3 +54,6 @@ export const resizePty = (sessionId: string, cols: number, rows: number) =>
 
 export const openExternalTerminal = (path: string) =>
   invoke<void>("open_external_terminal", { path });
+
+export const openInVscode = (projectName: string) =>
+  invoke<void>("open_in_vscode", { projectName });

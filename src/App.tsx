@@ -11,6 +11,7 @@ import ConfirmDeleteModal from "./components/ConfirmDeleteModal";
 import HelpModal from "./components/HelpModal";
 import OptionsModal from "./components/OptionsModal";
 import { useWorktreeStatus } from "./hooks/useWorktreeStatus";
+import ContextMenu, { MenuItem } from "./components/ContextMenu";
 
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -64,6 +65,8 @@ export default function App() {
   const [modal, setModal] = useState<Modal>({ type: "none" });
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [altHeld, setAltHeld] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
+  const projectMenuBtnRef = useRef<HTMLButtonElement>(null);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const { statuses, refresh: refreshStatuses } = useWorktreeStatus();
 
@@ -180,6 +183,80 @@ export default function App() {
     setSelectedProject(projectName);
     setModal({ type: "addRepo" });
   }, []);
+
+  const openInVscode = useCallback(async (projectName: string) => {
+    try {
+      await api.openInVscode(projectName);
+    } catch (e) {
+      setErrorMessage(String(e));
+    }
+  }, []);
+
+  const buildProjectMenu = useCallback(
+    (projectName: string, repoName?: string): MenuItem[] => {
+      const items: MenuItem[] = [
+        {
+          type: "item",
+          label: "Open in VS Code",
+          icon: "⬡",
+          onClick: () => openInVscode(projectName),
+        },
+        { type: "separator" },
+        {
+          type: "item",
+          label: "Open Terminal",
+          onClick: () => openTerminalFor(projectName, repoName),
+        },
+      ];
+      if (repoName) {
+        items.push({
+          type: "item",
+          label: "View Diff",
+          onClick: () => diffFor(projectName, repoName),
+        });
+      }
+      items.push({
+        type: "item",
+        label: repoName ? "Push Worktree" : "Push Project",
+        onClick: () => pushFor(projectName, repoName),
+      });
+      if (!repoName) {
+        items.push({
+          type: "item",
+          label: "Add Repo",
+          onClick: () => addRepoFor(projectName),
+        });
+      }
+      items.push(
+        { type: "separator" },
+        {
+          type: "item",
+          label: repoName ? "Remove Worktree" : "Delete Project",
+          danger: true,
+          onClick: () => deleteFor(projectName, repoName),
+        },
+      );
+      return items;
+    },
+    [openInVscode, openTerminalFor, diffFor, pushFor, addRepoFor, deleteFor],
+  );
+
+  const openContextMenu = useCallback(
+    (e: React.MouseEvent, projectName: string, repoName?: string) => {
+      setContextMenu({ x: e.clientX, y: e.clientY, items: buildProjectMenu(projectName, repoName) });
+    },
+    [buildProjectMenu],
+  );
+
+  const openProjectMenuFromBtn = useCallback(() => {
+    if (!projectMenuBtnRef.current || !selectedProject) return;
+    const rect = projectMenuBtnRef.current.getBoundingClientRect();
+    setContextMenu({
+      x: rect.left,
+      y: rect.bottom + 4,
+      items: buildProjectMenu(selectedProject, selectedRepo ?? undefined),
+    });
+  }, [selectedProject, selectedRepo, buildProjectMenu]);
 
   const handlePush = useCallback(
     async (commitMessage?: string) => {
@@ -300,6 +377,16 @@ export default function App() {
           : <span className="header-spacer" />
         }
         <div className="header-toolbar">
+          {selectedProject && (
+            <button
+              ref={projectMenuBtnRef}
+              className="toolbar-btn toolbar-btn-accent"
+              onClick={openProjectMenuFromBtn}
+              title="Project menu"
+            >
+              Project ▾
+            </button>
+          )}
           <button className="toolbar-btn" onClick={() => setModal({ type: "options" })} title="Options (Alt+O)">
             options{altHeld && <KbdHint k="O" />}
           </button>
@@ -328,6 +415,7 @@ export default function App() {
             onPush={pushFor}
             onDiff={diffFor}
             onDelete={deleteFor}
+            onContextMenu={openContextMenu}
           />
         </div>
 
@@ -498,6 +586,15 @@ export default function App() {
           settings={config.settings}
           onSave={handleSaveSettings}
           onClose={() => setModal({ type: "none" })}
+        />
+      )}
+
+      {contextMenu && (
+        <ContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={contextMenu.items}
+          onClose={() => setContextMenu(null)}
         />
       )}
     </div>
