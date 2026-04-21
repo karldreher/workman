@@ -1,27 +1,20 @@
 # workman
 
-A minimalist Git worktree manager for staying focused in large repositories.
+A Git worktree manager for staying focused in large repositories.
 
-`workman` provides a TUI to manage multiple Git worktrees across multiple repos, organized into **Projects**. A Project groups worktrees from different repos — all on the same branch — so you can work on a feature that spans several codebases without losing context.
+`workman` organizes worktrees from multiple repos into **Projects**. A Project groups worktrees — one per repo — all on the same branch, so you can work on a feature that spans several codebases without losing context.
 
 ## Concepts
 
 | Term | Meaning |
 | :--- | :--- |
-| **Repo** | A git repository registered in the global pool. Equivalent to what was previously called a "project." |
-| **Project** | A named grouping of worktrees, one per selected repo, all on the same branch (e.g., `feat/my-feature`). Represents a unit of work across multiple repos. |
-| **Worktree** | A checked-out branch inside a repo, isolated under `<repo>/.workman/<branch>/`. Belongs to one Project. |
+| **Repo** | A git repository registered in the global pool. |
+| **Project** | A named grouping of worktrees, all on the same branch (e.g. `feat/my-feature`). |
+| **Worktree** | A checked-out branch inside a repo, under `<repo>/.workman/<branch>/`. |
 
-### Workflow
+### Project folder
 
-1. Register your repos globally (`a`).
-2. Create a Project (`n`): give it a name, a branch, and select which repos to include. `workman` creates a worktree in each repo on that branch.
-3. Open a terminal (`c`) in any worktree or at the project root.
-4. Push changes (`p`) for a single worktree or all worktrees in a project at once.
-
-### Project Folder
-
-Each Project gets a folder at `~/.workman/projects/<name>/` containing symlinks to each of its worktrees. Opening a terminal at the Project level lands you here, giving you a single place to navigate across all repos involved in the project.
+Each Project gets a folder at `~/.workman/projects/<name>/` with symlinks to its worktrees:
 
 ```
 ~/.workman/projects/my-feature/
@@ -32,120 +25,118 @@ Each Project gets a folder at `~/.workman/projects/<name>/` containing symlinks 
 
 ## Installation
 
-### Manual
+Download the latest release for your platform from [GitHub Releases](https://github.com/karldreher/workman/releases).
+
+**macOS**: Open the `.dmg`, drag the app to `/Applications`.
+
+> If macOS shows a security warning, go to System Settings → Privacy & Security and click Open Anyway, or run:
+> ```bash
+> xattr -dr com.apple.quarantine /Applications/workman.app
+> ```
+
+**Linux**: Use the `.AppImage` (chmod +x, run directly) or install the `.deb` / `.rpm` package.
+
+**Windows**: Run the NSIS `.exe` installer or the `.msi`.
+
+## Local development
+
+### Prerequisites
+
+- [Rust](https://rustup.rs/) (stable)
+- [Node.js](https://nodejs.org/) 22+
+- macOS/Linux: Xcode CLT or standard build tools
+- Linux: webkit2gtk and related packages (see below)
 
 ```bash
-git clone https://github.com/your-username/workman
+# Linux system dependencies
+sudo apt-get install -y \
+  libwebkit2gtk-4.1-dev libgtk-3-dev \
+  libayatana-appindicator3-dev librsvg2-dev patchelf
+```
+
+### Run in development mode
+
+```bash
+git clone https://github.com/karldreher/workman
 cd workman
-cargo build --release
-cp target/release/workman /usr/local/bin/
+npm install
+npm run tauri dev
 ```
 
-### macOS (GitHub Releases)
+Hot-reload is active: frontend changes reflect immediately; Rust changes trigger a backend rebuild.
 
-If you download the binary from GitHub Releases, macOS will quarantine it. Run:
+### Run tests
 
 ```bash
-xattr -d com.apple.quarantine workman
+# Rust unit tests
+cargo test --manifest-path src-tauri/Cargo.toml
+
+# TypeScript typecheck
+npx tsc --noEmit
+
+# Frontend build
+npm run build
 ```
 
-Or right-click → Open → Open Anyway in Finder.
+### Build a release bundle
 
-## Usage
-
-Run `workman` from any terminal.
-
-### UI Layout
-
-```
-┌─ Projects & Repos ───┐  ┌─ Help ────────────────────────────────────────┐
-│ ▼ my-feature         │  │ [Enter] expand/collapse  [w] add worktrees ... │
-│   ├── [frontend]     │  └───────────────────────────────────────────────-┘
-│   │   feat/my-feat.. │  ┌─ Output ───────────────────────────────────────┐
-│   └── [backend]      │  │                                                 │
-│       feat/my-feat.. │  │  Push successful!                               │
-│ ▶ another-project    │  │  ✓ [frontend]  pushed                           │
-│ ── Repos ──          │  │  ✓ [backend]   pushed                           │
-│   frontend (/repos/…)│  │                                                 │
-│   backend  (/repos/…)│  │                                                 │
-└──────────────────────┘  └─────────────────────────────────────────────────┘
+```bash
+npm run tauri build
+# Output: src-tauri/target/release/bundle/
 ```
 
-- **Left panel**: Projects (expandable) with their worktrees, then the global Repo list.
-- **Right panel**: Context-sensitive help bar + output/terminal pane.
-- Worktree status is color-coded: **green** = clean, **red** = dirty.
+### Replace placeholder icons
 
-### Keybindings
+The repo ships with minimal placeholder icons. To use your own:
 
-#### Global
+```bash
+# Generate all required sizes from a 512×512+ RGBA PNG
+npm run tauri icon path/to/your-icon.png
+```
 
-| Key | Action |
-| :--- | :--- |
-| `q` / `Ctrl+C` | Quit |
-| `↑` / `↓` | Navigate |
-| `Ctrl+L` | Export error log to `/tmp/workman.log` |
-
-#### Normal mode
+## Keybindings
 
 | Key | Context | Action |
 | :--- | :--- | :--- |
-| `n` | Anywhere | Create a new Project (3-step wizard: name → branch → select repos) |
-| `a` | Anywhere | Add a Repo to the global pool (Tab for path autocomplete) |
-| `x` | Repo selected | Remove repo from global pool |
-| `Enter` | Project selected | Expand / collapse project worktrees |
-| `w` | Project selected | Add more worktrees to the project (select from remaining repos) |
-| `r` | Project selected | Delete project (removes all worktrees + project folder) |
-| `r` | Worktree selected | Remove that worktree |
-| `c` | Project selected | Open terminal at project folder |
-| `c` | Worktree selected | Open terminal in that worktree |
-| `p` | Project selected | Push all worktrees (prompts for commit message) |
-| `p` | Worktree selected | Push that worktree |
-| `d` | Worktree selected | Show diff (Space to scroll, Esc to exit) |
-| `o` | Anywhere | Open Options |
-| `Esc` | Anywhere | Cancel / clear output |
+| `n` | Anywhere | Create a new project |
+| `a` | Project selected | Add a repo to the project |
+| `t` | Project / worktree selected | Open terminal (or external terminal if `use_tmux` is on) |
+| `p` | Project / worktree selected | Push (prompts for commit message) |
+| `d` | Worktree selected | Show diff |
+| `x` | Project / worktree selected | Delete |
+| `o` | Anywhere | Options |
+| `h` | Anywhere | Help |
+| `↑` / `↓` | Anywhere | Navigate |
+| `Enter` | Project selected | Expand / collapse |
+| `Esc` | Anywhere | Close panel / dismiss error |
+| `q` | Anywhere | Quit |
 
-#### Terminal mode (in-app PTY)
+### In the terminal pane
 
-| Key | Action |
-| :--- | :--- |
-| `Esc` | Detach from session (session stays alive) |
-| `Ctrl+C` | Send interrupt to shell |
+Click **✕ detach** in the header to return to the tree while keeping the shell session alive.
 
-#### Tmux mode (when Use Tmux is enabled)
-
-| Key | Action |
-| :--- | :--- |
-| `Ctrl-B D` | Detach from tmux session (workman resumes) |
-
-### Options (`o`)
-
-| Setting | Default | Description |
-| :--- | :--- | :--- |
-| Use Tmux | Off | When enabled, `c` opens a named `tmux` session instead of the built-in PTY. Session names follow the pattern `workman-<project>-<repo>`. `tmux` must be installed and on `$PATH`. |
-
-## Status Indicators
-
-Each worktree row shows a git status summary:
+## Status indicators
 
 | Indicator | Meaning |
 | :--- | :--- |
-| `clean` | No uncommitted changes, no unpushed commits |
+| `clean` | No changes, no unpushed commits |
 | `5/-3` | 5 insertions, 3 deletions (unstaged) |
 | `U:2` | 2 untracked files |
 | `↑1` | 1 unpushed commit |
 | `N/A` | Worktree path no longer exists |
 
+## Options
+
+| Setting | Default | Description |
+| :--- | :--- | :--- |
+| `use_tmux` | off | When on, `t` opens the system terminal app at the worktree/project path instead of the built-in xterm pane. |
+
 ## Configuration
 
-`workman` stores its config at `~/.workman.config` (JSON). You should not need to edit this manually.
+Config is stored at `~/.workman.config` (JSON). Manual editing is not required.
 
-**Upgrading from an older version**: If `workman` detects the legacy format (repos stored as "projects"), it automatically migrates them to the new `repos` list and displays a notice. Your data is preserved — just create your first Project with `n`.
+**Migrating from an older version**: if `workman` detects the legacy format it automatically migrates your repos and displays a notice. Create your first project with `n`.
 
-## Technical Details
+## Technical details
 
-Built with **Rust**, **tokio** (async runtime), **ratatui**, **crossterm**, **portable-pty** (PTY management), and **vt100** (terminal emulation). Relies on native `git` and `signal-hook` for safe terminal restoration.
-
-When **Use Tmux** is enabled, `portable-pty` is bypassed entirely. `workman` restores the terminal, hands off to `tmux new-session -A -s <name> -c <path>`, then re-enters raw mode when you detach.
-
----
-Built for efficiency.
+Built with **Rust** + **Tauri v2** (backend) and **React + TypeScript + Vite** (frontend). Terminal emulation via **xterm.js**; PTY management via **portable-pty**. Config uses **serde_json**.

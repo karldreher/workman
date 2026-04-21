@@ -205,9 +205,12 @@ impl Project {
 
     /// Adds a symlink inside the project folder pointing to a worktree.
     pub fn add_symlink(&self, wt: &ProjectWorktree) -> Result<()> {
-        let link_path = self.folder.join(&wt.repo_name);
-        if !link_path.exists() {
-            std::os::unix::fs::symlink(&wt.path, &link_path)?;
+        #[cfg(unix)]
+        {
+            let link_path = self.folder.join(&wt.repo_name);
+            if !link_path.exists() {
+                std::os::unix::fs::symlink(&wt.path, &link_path)?;
+            }
         }
         Ok(())
     }
@@ -252,7 +255,7 @@ impl Config {
     }
 
     /// Loads config from disk, migrating from the legacy format if needed.
-    /// Returns the config and an optional migration notice to display to the user.
+    /// Returns the config and an optional migration notice.
     pub fn load() -> (Self, Option<String>) {
         let path = Self::get_path();
         if !path.exists() {
@@ -265,14 +268,12 @@ impl Config {
             Err(_) => return (Self::default(), None),
         };
 
-        // If the `repos` key exists, this is already the new format
         if raw.get("repos").is_some() {
             let config = serde_json::from_value::<Config>(raw).unwrap_or_default();
             return (config, None);
         }
 
-        // Attempt migration from legacy format:
-        // old: { "projects": [{ "name", "path", "worktrees": [{ "name", "path" }] }] }
+        // Migrate from legacy format
         #[derive(Deserialize)]
         struct LegacyProject {
             name: String,
@@ -369,14 +370,11 @@ mod tests {
         let temp_dir = tempfile::tempdir().unwrap();
         let path = temp_dir.path().to_path_buf();
 
-        // Should fail if no .git
         assert!(Config::validate_repo_path(&path).is_err());
 
-        // Should pass if .git exists
         fs::create_dir(path.join(".git")).unwrap();
         assert!(Config::validate_repo_path(&path).is_ok());
 
-        // Should fail if path does not exist
         let non_existent = PathBuf::from("/nonexistent/path/for/workman/test");
         assert!(Config::validate_repo_path(&non_existent).is_err());
     }

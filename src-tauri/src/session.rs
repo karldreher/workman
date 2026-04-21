@@ -1,17 +1,21 @@
 use anyhow::Result;
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-use std::sync::{Arc, Mutex};
 use std::io::{Read, Write};
-use vt100::Parser; // Removed Screen import here
+use tauri::Emitter;
 
 pub struct Session {
-    pub parser: Arc<Mutex<Parser>>,
     pub writer: Box<dyn Write + Send>,
     pub master: Box<dyn portable_pty::MasterPty + Send>,
 }
 
 impl Session {
-    pub fn new(path: std::path::PathBuf, width: u16, height: u16) -> Result<Self> {
+    pub fn new(
+        session_id: String,
+        path: std::path::PathBuf,
+        width: u16,
+        height: u16,
+        app_handle: tauri::AppHandle,
+    ) -> Result<Self> {
         let pty_system = native_pty_system();
         let pair = pty_system.openpty(PtySize {
             rows: height,
@@ -24,34 +28,40 @@ impl Session {
         let mut cmd = CommandBuilder::new(shell);
         cmd.cwd(path);
 
-        let mut _child = pair.slave.spawn_command(cmd)?;
-        
-        let parser = Arc::new(Mutex::new(Parser::new(height, width, 1000)));
-        let parser_clone = parser.clone();
-        
+        let _child = pair.slave.spawn_command(cmd)?;
+
         let mut reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
         let master = pair.master;
 
+        let session_id_clone = session_id.clone();
+        let app_handle_clone = app_handle.clone();
         tokio::task::spawn_blocking(move || {
             let mut buf = [0u8; 4096];
             loop {
                 match reader.read(&mut buf) {
-                    Ok(0) => break,
+                    Ok(0) => {
+                        let _ = app_handle_clone.emit(
+                            "pty-exit",
+                            serde_json::json!({ "session_id": session_id_clone }),
+                        );
+                        break;
+                    }
                     Ok(n) => {
-                        let mut p = parser_clone.lock().unwrap();
-                        p.process(&buf[..n]);
+                        let _ = app_handle_clone.emit(
+                            "pty-output",
+                            serde_json::json!({
+                                "session_id": session_id_clone,
+                                "data": &buf[..n]
+                            }),
+                        );
                     }
                     Err(_) => break,
                 }
             }
         });
 
-        Ok(Self {
-            parser,
-            writer,
-            master,
-        })
+        Ok(Self { writer, master })
     }
 
     pub fn write(&mut self, data: &[u8]) -> Result<()> {
@@ -67,8 +77,6 @@ impl Session {
             pixel_width: 0,
             pixel_height: 0,
         })?;
-        self.parser.lock().unwrap().set_size(height, width);
         Ok(())
     }
 }
-
