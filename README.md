@@ -39,61 +39,9 @@ Download the latest release for your platform from [GitHub Releases](https://git
 
 **Windows**: Run the NSIS `.exe` installer or the `.msi`.
 
-## Local development
+## Contributing
 
-### Prerequisites
-
-- [Rust](https://rustup.rs/) (stable)
-- [Node.js](https://nodejs.org/) 22+
-- macOS/Linux: Xcode CLT or standard build tools
-- Linux: webkit2gtk and related packages (see below)
-
-```bash
-# Linux system dependencies
-sudo apt-get install -y \
-  libwebkit2gtk-4.1-dev libgtk-3-dev \
-  libayatana-appindicator3-dev librsvg2-dev patchelf
-```
-
-### Run in development mode
-
-```bash
-git clone https://github.com/karldreher/workman
-cd workman
-npm install
-npm run tauri dev
-```
-
-Hot-reload is active: frontend changes reflect immediately; Rust changes trigger a backend rebuild.
-
-### Run tests
-
-```bash
-# Rust unit tests
-cargo test --manifest-path src-tauri/Cargo.toml
-
-# TypeScript typecheck
-npx tsc --noEmit
-
-# Frontend build
-npm run build
-```
-
-### Build a release bundle
-
-```bash
-npm run tauri build
-# Output: src-tauri/target/release/bundle/
-```
-
-### Replace placeholder icons
-
-The repo ships with minimal placeholder icons. To use your own:
-
-```bash
-# Generate all required sizes from a 512×512+ RGBA PNG
-npm run tauri icon path/to/your-icon.png
-```
+See [CONTRIBUTING.md](CONTRIBUTING.md) for local development setup, testing instructions, and code style guidance.
 
 ## Keybindings
 
@@ -101,7 +49,7 @@ npm run tauri icon path/to/your-icon.png
 | :--- | :--- | :--- |
 | `n` | Anywhere | Create a new project |
 | `a` | Project selected | Add a repo to the project |
-| `t` | Project / worktree selected | Open terminal (or external terminal if `use_tmux` is on) |
+| `t` | Project / worktree selected | Open terminal (or external terminal if "Use external terminal" is on) |
 | `p` | Project / worktree selected | Push (prompts for commit message) |
 | `d` | Worktree selected | Show diff |
 | `x` | Project / worktree selected | Delete |
