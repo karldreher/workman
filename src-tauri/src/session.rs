@@ -24,7 +24,11 @@ impl Session {
             pixel_height: 0,
         })?;
 
+        #[cfg(target_os = "windows")]
+        let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+        #[cfg(not(target_os = "windows"))]
         let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
+
         let mut cmd = CommandBuilder::new(shell);
         cmd.cwd(path);
 
@@ -36,7 +40,7 @@ impl Session {
 
         let session_id_clone = session_id.clone();
         let app_handle_clone = app_handle.clone();
-        tokio::task::spawn_blocking(move || {
+        std::thread::spawn(move || {
             let mut buf = [0u8; 4096];
             loop {
                 match reader.read(&mut buf) {
