@@ -1,11 +1,13 @@
 import { useEffect } from "react";
 
 interface Props {
+  /** Human-readable description of what will be deleted (shown in the modal body). */
   message: string;
   onConfirm: () => void;
   onCancel: () => void;
 }
 
+/** Destructive-action confirmation modal. Accepts `y`/Enter to confirm and `n`/Escape to cancel. */
 export default function ConfirmDeleteModal({ message, onConfirm, onCancel }: Props) {
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {

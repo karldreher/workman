@@ -1,16 +1,20 @@
 import { useEffect, useRef } from "react";
 
+/** A single entry in a {@link ContextMenu}. Use `type: "separator"` for a visual divider. */
 export type MenuItem =
   | { type: "item"; label: string; icon?: string; onClick: () => void; danger?: boolean; disabled?: boolean }
   | { type: "separator" };
 
 interface Props {
+  /** Viewport X coordinate for the menu's top-left corner (clamped to stay on screen). */
   x: number;
+  /** Viewport Y coordinate for the menu's top-left corner (clamped to stay on screen). */
   y: number;
   items: MenuItem[];
   onClose: () => void;
 }
 
+/** Fixed-position context menu. Clamps itself to the viewport after mount and closes on outside click or Escape. */
 export default function ContextMenu({ x, y, items, onClose }: Props) {
   const menuRef = useRef<HTMLDivElement>(null);
 

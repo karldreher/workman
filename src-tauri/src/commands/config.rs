@@ -11,6 +11,7 @@ use crate::state::WorkmanState;
 pub struct RepoSuggestion {
     pub path: String,
     pub known: bool,
+    pub is_git_repo: bool,
 }
 
 #[tauri::command]
@@ -58,12 +59,15 @@ pub fn compute_suggestions(query: &str, repos: &[Repo]) -> Vec<RepoSuggestion> {
             results.push(RepoSuggestion {
                 path: repo.path.to_string_lossy().to_string(),
                 known: true,
+                is_git_repo: true,
             });
         }
     }
 
-    let input_path = PathBuf::from(if query.is_empty() { "." } else { query });
-    let (dir, prefix): (PathBuf, String) = if query.is_empty() || query.ends_with('/') {
+    let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    let effective_query: &str = if query.is_empty() { home_dir.to_str().unwrap_or(".") } else { query };
+    let input_path = PathBuf::from(effective_query);
+    let (dir, prefix): (PathBuf, String) = if query.is_empty() || effective_query.ends_with('/') {
         (input_path, String::new())
     } else {
         let p = input_path.parent().map(|p| p.to_path_buf()).unwrap_or_else(|| PathBuf::from("."));
@@ -87,9 +91,11 @@ pub fn compute_suggestions(query: &str, repos: &[Repo]) -> Vec<RepoSuggestion> {
         }
         fs_dirs.sort();
         for p in fs_dirs {
+            let is_git_repo = p.join(".git").exists();
             results.push(RepoSuggestion {
                 path: p.to_string_lossy().to_string(),
                 known: false,
+                is_git_repo,
             });
         }
     }

@@ -22,6 +22,7 @@ interface Props {
   onClose: () => void;
 }
 
+/** Displays the keyboard shortcut reference table. Any keypress closes it. */
 export default function HelpModal({ onClose }: Props) {
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {

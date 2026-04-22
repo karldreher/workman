@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 
 interface Props {
+  /** Display label for what's being pushed (e.g. `"frontend"` or `"my-feature"`). */
   scope: string;
+  /** Called with the trimmed message, or `undefined` to use the default auto-commit message. */
   onConfirm: (message?: string) => void;
   onCancel: () => void;
 }
 
+/** Modal that prompts for an optional commit message before a push. */
 export default function CommitMessageModal({ scope, onConfirm, onCancel }: Props) {
   const [message, setMessage] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);

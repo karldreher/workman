@@ -128,10 +128,9 @@ body {
   overflow: hidden;
 }
 
-/* Tree panel */
+/* Tree panel — width is controlled via inline style (draggable) */
 .panel-tree {
-  width: 340px;
-  min-width: 240px;
+  min-width: 200px;
   flex-shrink: 0;
   border-right: 1px solid var(--border);
   background: var(--bg-panel);
@@ -159,6 +158,20 @@ body {
 .tree-panel-scroll {
   flex: 1;
   overflow-y: auto;
+}
+
+/* Draggable split bar */
+.split-bar {
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.split-bar:hover {
+  background: var(--accent);
+  opacity: 0.35;
 }
 
 /* Content panel */
@@ -574,6 +587,15 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--text);
+}
+
+.suggestion-known-repo {
+  border-left: 2px solid var(--accent);
+  padding-left: 6px;
+}
+
+.suggestion-non-git {
+  opacity: 0.45;
 }
 
 /* Confirm modal */

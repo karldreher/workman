@@ -2,11 +2,14 @@ import { useEffect, useState } from "react";
 import { Settings } from "../api/types";
 
 interface Props {
+  /** Current settings shown as initial state. */
   settings: Settings;
+  /** Called with the new settings when the user confirms (Enter). */
   onSave: (settings: Settings) => void;
   onClose: () => void;
 }
 
+/** Settings panel. Enter saves; Escape cancels. */
 export default function OptionsModal({ settings, onSave, onClose }: Props) {
   const [useTmux, setUseTmux] = useState(settings.use_tmux);
 

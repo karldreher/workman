@@ -6,6 +6,18 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { openPtySession, closePtySession, writeToPty, resizePty } from "../api/tauri";
 import "@xterm/xterm/css/xterm.css";
 
+/**
+ * Mounts an xterm.js terminal into `containerRef` and connects it to a backend PTY session.
+ *
+ * The session is identified by `sessionId` — reusing the same ID while the component
+ * is mounted reattaches to the existing shell process. The terminal is automatically
+ * resized when its container changes dimensions.
+ *
+ * @param containerRef - Ref to the DOM element that will host the xterm canvas.
+ * @param sessionId    - Unique identifier for the PTY session (e.g. `"myproject/frontend"`).
+ * @param workingDir   - Absolute path passed as the shell's working directory on first open.
+ * @returns A ref to the underlying {@link Terminal} instance (primarily for imperative use).
+ */
 export function usePtySession(
   containerRef: React.RefObject<HTMLDivElement | null>,
   sessionId: string,

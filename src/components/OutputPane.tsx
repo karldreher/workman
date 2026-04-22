@@ -1,9 +1,12 @@
 interface Props {
+  /** Lines to display. Empty string entries render as a non-breaking space to preserve line height. */
   lines: string[];
+  /** When `true`, lines are colorized as a unified diff (added/removed/hunk/header). */
   isDiff: boolean;
   onClose: () => void;
 }
 
+/** Maps a diff line to its CSS class for syntax coloring. */
 function lineClass(line: string, isDiff: boolean): string {
   if (!isDiff) return "output-line";
   if (line.startsWith("+") && !line.startsWith("+++")) return "output-line diff-add";

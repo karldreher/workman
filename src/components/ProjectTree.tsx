@@ -2,11 +2,15 @@ import { Config } from "../api/types";
 
 interface Props {
   config: Config;
+  /** Map of `"<project>/<repo>"` → status string (e.g. `"clean"`, `"5/-3"`, `"N/A"`). */
   statuses: Record<string, string>;
   selectedProject: string | null;
   selectedRepo: string | null;
+  /** Set of project names whose worktrees are currently expanded in the tree. */
   expandedProjects: Set<string>;
+  /** Whether the Alt/Option key is currently held — reveals keyboard shortcut hints. */
   altHeld: boolean;
+  /** `true` on macOS — affects how shortcut hints are rendered (⌥ vs `Alt+`). */
   isMac: boolean;
   onSelectProject: (name: string) => void;
   onSelectRepo: (project: string, repo: string) => void;
@@ -20,6 +24,7 @@ interface Props {
   onContextMenu: (e: React.MouseEvent, projectName: string, repoName?: string) => void;
 }
 
+/** Returns the CSS modifier class for a worktree status string. */
 function statusClass(status: string | undefined): string {
   if (!status || status === "...") return "loading";
   if (status === "clean") return "clean";
@@ -27,11 +32,13 @@ function statusClass(status: string | undefined): string {
   return "dirty";
 }
 
+/** Renders a keyboard shortcut badge when `altHeld` is true; renders nothing otherwise. */
 function Hint({ altHeld, isMac, k }: { altHeld: boolean; isMac: boolean; k: string }) {
   if (!altHeld) return null;
   return <span className="kbd-hint">{isMac ? `⌥${k}` : k}</span>;
 }
 
+/** Left-panel tree view listing all projects and their worktrees with inline action buttons. */
 export default function ProjectTree({
   config,
   statuses,

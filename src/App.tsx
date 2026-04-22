@@ -49,10 +49,12 @@ function buildTreeItems(config: Config, expanded: Set<string>): TreeItem[] {
   return items;
 }
 
+/** Renders a platform-appropriate keyboard shortcut badge (e.g. `⌥N` on Mac, `Alt+N` elsewhere). */
 function KbdHint({ k }: { k: string }) {
   return <span className="kbd-hint">{isMac ? `⌥${k}` : `Alt+${k}`}</span>;
 }
 
+/** Root application component. Owns all global state (config, selection, active panel, modals). */
 export default function App() {
   const [config, setConfig] = useState<Config | null>(null);
   const [selectedProject, setSelectedProject] = useState<string | null>(null);
@@ -68,6 +70,10 @@ export default function App() {
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
   const projectMenuBtnRef = useRef<HTMLButtonElement>(null);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
+  const [treePanelWidth, setTreePanelWidth] = useState(340);
+  const isDragging = useRef(false);
+  const dragStartX = useRef(0);
+  const dragStartWidth = useRef(0);
   const { statuses, refresh: refreshStatuses } = useWorktreeStatus();
 
   useEffect(() => {
@@ -248,6 +254,26 @@ export default function App() {
     [buildProjectMenu],
   );
 
+  const startSplitDrag = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isDragging.current = true;
+    dragStartX.current = e.clientX;
+    dragStartWidth.current = treePanelWidth;
+    const onMove = (ev: MouseEvent) => {
+      if (!isDragging.current) return;
+      const delta = ev.clientX - dragStartX.current;
+      const next = Math.max(200, Math.min(window.innerWidth * 0.5, dragStartWidth.current + delta));
+      setTreePanelWidth(next);
+    };
+    const onUp = () => {
+      isDragging.current = false;
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+    };
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [treePanelWidth]);
+
   const openProjectMenuFromBtn = useCallback(() => {
     if (!projectMenuBtnRef.current || !selectedProject) return;
     const rect = projectMenuBtnRef.current.getBoundingClientRect();
@@ -397,7 +423,7 @@ export default function App() {
       </header>
 
       <div className="app-body">
-        <div className="panel-tree">
+        <div className="panel-tree" style={{ width: treePanelWidth, flexShrink: 0 }}>
           <ProjectTree
             config={config}
             statuses={statuses}
@@ -418,6 +444,8 @@ export default function App() {
             onContextMenu={openContextMenu}
           />
         </div>
+
+        <div className="split-bar" onMouseDown={startSplitDrag} />
 
         <div className="panel-content">
           {activePanel === "terminal" && terminalSession && (

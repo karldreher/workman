@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { branchFromName } from "../api/tauri";
 
 interface Props {
+  /** Called with the trimmed project name when the user presses Enter. */
   onConfirm: (name: string) => void;
   onCancel: () => void;
 }
 
+/** Modal for creating a new project. Derives the git branch name from the entered project name in real-time. */
 export default function AddProjectModal({ onConfirm, onCancel }: Props) {
   const [name, setName] = useState("");
   const [branch, setBranch] = useState("");
