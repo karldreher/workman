@@ -130,7 +130,7 @@ Click **✕ detach** in the header to return to the tree while keeping the shell
 
 | Setting | Default | Description |
 | :--- | :--- | :--- |
-| `use_tmux` | off | When on, `t` opens the system terminal app at the worktree/project path instead of the built-in xterm pane. |
+| Use external terminal | off | When on, `t` opens the system terminal app at the worktree/project path instead of the built-in xterm pane. |
 
 ## Configuration
 

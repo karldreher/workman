@@ -186,13 +186,14 @@ impl Project {
 /// Global application settings.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Settings {
-    #[serde(default)]
-    pub use_tmux: bool,
+    /// Open the system terminal app instead of the built-in xterm pane.
+    #[serde(default, alias = "use_tmux")]
+    pub use_external_terminal: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Settings { use_tmux: false }
+        Settings { use_external_terminal: false }
     }
 }
 
@@ -334,6 +335,6 @@ mod tests {
     #[test]
     fn test_settings_default() {
         let s = Settings::default();
-        assert!(!s.use_tmux);
+        assert!(!s.use_external_terminal);
     }
 }

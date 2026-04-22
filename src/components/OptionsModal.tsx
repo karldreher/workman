@@ -11,16 +11,16 @@ interface Props {
 
 /** Settings panel. Enter saves; Escape cancels. */
 export default function OptionsModal({ settings, onSave, onClose }: Props) {
-  const [useTmux, setUseTmux] = useState(settings.use_tmux);
+  const [useExternalTerminal, setUseExternalTerminal] = useState(settings.use_external_terminal);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") { e.preventDefault(); onClose(); }
-      if (e.key === "Enter") { e.preventDefault(); onSave({ use_tmux: useTmux }); }
+      if (e.key === "Enter") { e.preventDefault(); onSave({ use_external_terminal: useExternalTerminal }); }
     }
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onSave, onClose, useTmux]);
+  }, [onSave, onClose, useExternalTerminal]);
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -28,14 +28,17 @@ export default function OptionsModal({ settings, onSave, onClose }: Props) {
         <div className="modal-title">Options</div>
         <div className="option-row">
           <div>
-            <div className="option-label">use_tmux</div>
-            <div className="option-desc">Open external terminal instead of in-app xterm</div>
+            <div className="option-label">Use external terminal</div>
+            <div className="option-desc">
+              Open the system terminal app instead of the built-in pane.
+              When off, sessions are persisted via tmux if available.
+            </div>
           </div>
           <button
-            className={`toggle${useTmux ? " on" : ""}`}
-            onClick={() => setUseTmux((v) => !v)}
+            className={`toggle${useExternalTerminal ? " on" : ""}`}
+            onClick={() => setUseExternalTerminal((v) => !v)}
           >
-            {useTmux ? "on" : "off"}
+            {useExternalTerminal ? "on" : "off"}
           </button>
         </div>
         <div className="modal-hint" style={{ marginTop: 12 }}>

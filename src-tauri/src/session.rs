@@ -8,6 +8,19 @@ pub struct Session {
     pub master: Box<dyn portable_pty::MasterPty + Send>,
 }
 
+fn tmux_available() -> bool {
+    std::process::Command::new("tmux")
+        .arg("-V")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
+
+/// Sanitizes a session_id for use as a tmux session name (no slashes or colons).
+fn tmux_session_name(session_id: &str) -> String {
+    session_id.replace(['/', '\\', ':', '.'], "-")
+}
+
 impl Session {
     pub fn new(
         session_id: String,
@@ -24,13 +37,24 @@ impl Session {
             pixel_height: 0,
         })?;
 
-        #[cfg(target_os = "windows")]
-        let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
-        #[cfg(not(target_os = "windows"))]
-        let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
-
-        let mut cmd = CommandBuilder::new(shell);
-        cmd.cwd(path);
+        let cmd = if tmux_available() {
+            let name = tmux_session_name(&session_id);
+            let dir = path.to_string_lossy().into_owned();
+            let mut c = CommandBuilder::new("tmux");
+            c.arg("new-session");
+            c.arg("-A");          // attach if exists, create if not
+            c.arg("-s"); c.arg(&name);
+            c.arg("-c"); c.arg(&dir);
+            c
+        } else {
+            #[cfg(target_os = "windows")]
+            let shell = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+            #[cfg(not(target_os = "windows"))]
+            let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_string());
+            let mut c = CommandBuilder::new(shell);
+            c.cwd(path);
+            c
+        };
 
         let _child = pair.slave.spawn_command(cmd)?;
 

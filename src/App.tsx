@@ -145,7 +145,7 @@ export default function App() {
       if (!path) return;
       setSelectedProject(projectName);
       setSelectedRepo(repoName ?? null);
-      if (config.settings.use_tmux) {
+      if (config.settings.use_external_terminal) {
         api.openExternalTerminal(path).catch((e) => setErrorMessage(String(e)));
         return;
       }

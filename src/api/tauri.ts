@@ -76,7 +76,7 @@ export const writeToPty = (sessionId: string, data: number[]) =>
 export const resizePty = (sessionId: string, cols: number, rows: number) =>
   invoke<void>("resize_pty", { sessionId, cols, rows });
 
-/** Opens the system terminal application at `path` (used when `use_tmux` is enabled). */
+/** Opens the system terminal application at `path` (used when `use_external_terminal` is enabled). */
 export const openExternalTerminal = (path: string) =>
   invoke<void>("open_external_terminal", { path });
 

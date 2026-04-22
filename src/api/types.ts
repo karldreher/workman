@@ -34,8 +34,10 @@ export interface Settings {
   /**
    * When `true`, the terminal action opens the system terminal app at the
    * worktree/project path instead of the built-in xterm pane.
+   * When `false` (default), the built-in xterm pane is used, with tmux
+   * session persistence if tmux is available on the system.
    */
-  use_tmux: boolean;
+  use_external_terminal: boolean;
 }
 
 /** Top-level configuration object stored at `~/.workman.config` (JSON). */
