@@ -68,6 +68,7 @@ export default function App() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [altHeld, setAltHeld] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; items: MenuItem[] } | null>(null);
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem("theme") === "dark");
   const projectMenuBtnRef = useRef<HTMLButtonElement>(null);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const [treePanelWidth, setTreePanelWidth] = useState(340);
@@ -83,6 +84,11 @@ export default function App() {
       if (cfg.projects.length > 0) setSelectedProject(cfg.projects[0].name);
     });
   }, []);
+
+  useEffect(() => {
+    document.documentElement.setAttribute("data-theme", darkMode ? "dark" : "light");
+    localStorage.setItem("theme", darkMode ? "dark" : "light");
+  }, [darkMode]);
 
   useEffect(() => {
     const down = (e: KeyboardEvent) => { if (e.key === "Alt") setAltHeld(true); };
@@ -612,6 +618,8 @@ export default function App() {
       {modal.type === "options" && (
         <OptionsModal
           settings={config.settings}
+          darkMode={darkMode}
+          onDarkModeChange={setDarkMode}
           onSave={handleSaveSettings}
           onClose={() => setModal({ type: "none" })}
         />

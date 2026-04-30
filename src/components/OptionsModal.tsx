@@ -4,14 +4,17 @@ import { Settings } from "../api/types";
 interface Props {
   /** Current settings shown as initial state. */
   settings: Settings;
+  darkMode: boolean;
+  onDarkModeChange: (v: boolean) => void;
   /** Called with the new settings when the user confirms (Enter). */
   onSave: (settings: Settings) => void;
   onClose: () => void;
 }
 
 /** Settings panel. Enter saves; Escape cancels. */
-export default function OptionsModal({ settings, onSave, onClose }: Props) {
+export default function OptionsModal({ settings, darkMode, onDarkModeChange, onSave, onClose }: Props) {
   const [useExternalTerminal, setUseExternalTerminal] = useState(settings.use_external_terminal);
+  const [localDark, setLocalDark] = useState(darkMode);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -26,6 +29,18 @@ export default function OptionsModal({ settings, onSave, onClose }: Props) {
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
         <div className="modal-title">Options</div>
+        <div className="option-row">
+          <div>
+            <div className="option-label">Dark mode</div>
+            <div className="option-desc">Use dark background with light text.</div>
+          </div>
+          <button
+            className={`toggle${localDark ? " on" : ""}`}
+            onClick={() => { const v = !localDark; setLocalDark(v); onDarkModeChange(v); }}
+          >
+            {localDark ? "on" : "off"}
+          </button>
+        </div>
         <div className="option-row">
           <div>
             <div className="option-label">Use external terminal</div>
