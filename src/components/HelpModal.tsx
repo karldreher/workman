@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 const mod = isMac ? "⌥" : "Alt+";
@@ -22,8 +22,9 @@ interface Props {
   onClose: () => void;
 }
 
-/** Displays the keyboard shortcut reference table. Any keypress closes it. */
 export default function HelpModal({ onClose }: Props) {
+  const [tab, setTab] = useState<"about" | "shortcuts">("about");
+
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       e.preventDefault();
@@ -36,17 +37,55 @@ export default function HelpModal({ onClose }: Props) {
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-title">Keyboard shortcuts</div>
-        <table className="help-table">
-          <tbody>
-            {shortcuts.map(([key, desc]) => (
-              <tr key={key}>
-                <td>{key}</td>
-                <td>{desc}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="modal-tabs">
+          <button
+            className={`modal-tab${tab === "about" ? " active" : ""}`}
+            onClick={() => setTab("about")}
+          >
+            about
+          </button>
+          <button
+            className={`modal-tab${tab === "shortcuts" ? " active" : ""}`}
+            onClick={() => setTab("shortcuts")}
+          >
+            shortcuts
+          </button>
+        </div>
+
+        {tab === "about" && (
+          <div className="help-about">
+            <p>
+              workman manages git worktrees across multiple repositories.
+              Create a <strong>project</strong> once and workman provisions
+              matching worktrees in every registered repo — all on the same
+              branch, ready to work in parallel.
+            </p>
+            <p>
+              From any project you can open a terminal, inspect a diff,
+              and commit and push every repo in one action — no branch
+              switching, no stashing.
+            </p>
+            <div className="help-about-detail">
+              <div><span>projects</span> named groupings of worktrees sharing a branch</div>
+              <div><span>repos</span> git repositories registered once, reused across projects</div>
+              <div><span>worktrees</span> checkouts at <code>~/.workman/projects/&lt;project&gt;/&lt;repo&gt;/</code></div>
+            </div>
+          </div>
+        )}
+
+        {tab === "shortcuts" && (
+          <table className="help-table">
+            <tbody>
+              {shortcuts.map(([key, desc]) => (
+                <tr key={key}>
+                  <td>{key}</td>
+                  <td>{desc}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
         <div className="modal-hint" style={{ marginTop: 12 }}>
           Any key to close
         </div>
