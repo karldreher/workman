@@ -16,7 +16,7 @@ jobs:
     name: Rust tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -30,9 +30,20 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Cache Cargo
+        uses: actions/cache@v5
         with:
-          workspaces: "src-tauri -> target"
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ github.head_ref || github.ref_name }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ github.head_ref || github.ref_name }}-
+            ${{ runner.os }}-cargo-${{ github.base_ref }}-
+            ${{ runner.os }}-cargo-
 
       - name: Run tests
         working-directory: src-tauri
@@ -42,20 +53,27 @@ jobs:
     name: Frontend typecheck + build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
         with:
-          node-version: "22"
-          cache: "npm"
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ github.head_ref || github.ref_name }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-${{ github.head_ref || github.ref_name }}-
+            ${{ runner.os }}-bun-${{ github.base_ref }}-
+            ${{ runner.os }}-bun-
 
-      - run: npm ci
+      - run: bun install --frozen-lockfile
 
       - name: TypeScript check
-        run: npx tsc --noEmit
+        run: bunx tsc --noEmit
 
       - name: Build
-        run: npm run build
+        run: bun run build
 
   build-tauri:
     name: Tauri smoke build (${{ matrix.os }})
@@ -68,12 +86,9 @@ jobs:
           - os: ubuntu-latest
           - os: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
+      - uses: oven-sh/setup-bun@v2
 
       - uses: dtolnay/rust-toolchain@stable
 
@@ -88,11 +103,32 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Cache Cargo
+        uses: actions/cache@v5
         with:
-          workspaces: "src-tauri -> target"
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            target/
+          key: ${{ runner.os }}-cargo-${{ github.head_ref || github.ref_name }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ github.head_ref || github.ref_name }}-
+            ${{ runner.os }}-cargo-${{ github.base_ref }}-
+            ${{ runner.os }}-cargo-
 
-      - run: npm ci
+      - name: Cache Bun dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ github.head_ref || github.ref_name }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-bun-${{ github.head_ref || github.ref_name }}-
+            ${{ runner.os }}-bun-${{ github.base_ref }}-
+            ${{ runner.os }}-bun-
+
+      - run: bun install --frozen-lockfile
 
       - name: Tauri build (debug, no bundle)
-        run: npm run tauri build -- --debug --no-bundle
+        run: bun run tauri build --debug --no-bundle
