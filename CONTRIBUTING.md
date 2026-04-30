@@ -3,8 +3,8 @@
 ## Prerequisites
 
 - [Rust](https://rustup.rs/) (stable toolchain)
-- [Node.js](https://nodejs.org/) 22+
-- [Tauri CLI](https://tauri.app/start/prerequisites/) — installed automatically via `npm run tauri`
+- [Bun](https://bun.sh/) 1.0+
+- [Tauri CLI](https://tauri.app/start/prerequisites/) — installed automatically via `bun run tauri`
 - macOS/Linux: Xcode Command Line Tools or standard build tools
 - Linux: webkit2gtk and related system packages
 
@@ -20,8 +20,8 @@ sudo apt-get install -y \
 ```bash
 git clone https://github.com/karldreher/workman
 cd workman
-npm install
-npm run tauri dev
+bun install
+bun run tauri dev
 ```
 
 Hot-reload is active: frontend changes reflect immediately; Rust changes trigger a backend rebuild.
@@ -33,16 +33,16 @@ Hot-reload is active: frontend changes reflect immediately; Rust changes trigger
 cargo test --manifest-path src-tauri/Cargo.toml
 
 # TypeScript typecheck
-npx tsc --noEmit
+bunx tsc --noEmit
 
 # Frontend build
-npm run build
+bun run build
 ```
 
 ## Build a release bundle
 
 ```bash
-npm run tauri build
+bun run tauri build
 # Output: src-tauri/target/release/bundle/
 ```
 
@@ -52,7 +52,7 @@ The repo ships with minimal placeholder icons. To use your own:
 
 ```bash
 # Generate all required sizes from a 512×512+ RGBA PNG
-npm run tauri icon path/to/your-icon.png
+bun run tauri icon path/to/your-icon.png
 ```
 
 ## Code style
