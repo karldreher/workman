@@ -37,12 +37,9 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: "npm"
+      - uses: oven-sh/setup-bun@v2
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -59,12 +56,7 @@ jobs:
             librsvg2-dev \
             patchelf
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "src-tauri -> target"
-          key: ${{ matrix.platform }}
-
-      - run: npm ci
+      - run: bun install --frozen-lockfile
 
       - uses: tauri-apps/tauri-action@v0
         env:
